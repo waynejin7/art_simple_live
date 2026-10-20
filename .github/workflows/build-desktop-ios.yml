@@ -1,4 +1,4 @@
-name: Build iOS and Windows
+name: Build iOS Windows and Android TV
 
 on:
   workflow_dispatch:
@@ -56,3 +56,27 @@ jobs:
         with:
           name: SimpleLive-Windows
           path: SimpleLive-Windows.zip
+
+  android-tv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.3'
+          cache: true
+      - name: Dependencies
+        working-directory: simple_live_tv_app
+        run: flutter pub get
+      - name: Build TV APK
+        working-directory: simple_live_tv_app
+        run: flutter build apk --debug --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLive-Android-TV
+          path: simple_live_tv_app/build/app/outputs/flutter-apk/*-debug.apk
+          if-no-files-found: error
