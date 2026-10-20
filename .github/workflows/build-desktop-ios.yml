@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   ios:
@@ -72,11 +72,64 @@ jobs:
       - name: Dependencies
         working-directory: simple_live_tv_app
         run: flutter pub get
+      - name: Configure TV release signing
+        env:
+          TV_KEYSTORE_BASE64: ${{ secrets.TV_KEYSTORE_BASE64 }}
+          TV_KEY_ALIAS: ${{ secrets.TV_KEY_ALIAS }}
+          TV_KEY_PASSWORD: ${{ secrets.TV_KEY_PASSWORD }}
+          TV_STORE_PASSWORD: ${{ secrets.TV_STORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in TV_KEYSTORE_BASE64 TV_KEY_ALIAS TV_KEY_PASSWORD TV_STORE_PASSWORD; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing GitHub Actions secret: $key"
+              exit 1
+            fi
+          done
+          printf '%s' "$TV_KEYSTORE_BASE64" | base64 --decode > simple_live_tv_app/android/app/release.jks
+          {
+            printf 'storeFile=release.jks\n'
+            printf 'storePassword=%s\n' "$TV_STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$TV_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$TV_KEY_PASSWORD"
+          } > simple_live_tv_app/android/key.properties
+          chmod 600 simple_live_tv_app/android/key.properties simple_live_tv_app/android/app/release.jks
       - name: Build TV APK
         working-directory: simple_live_tv_app
-        run: flutter build apk --debug --split-per-abi
+        run: flutter build apk --release --split-per-abi
       - uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android-TV
-          path: simple_live_tv_app/build/app/outputs/flutter-apk/*-debug.apk
+          path: simple_live_tv_app/build/app/outputs/flutter-apk/*-release.apk
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [ios, windows, android-tv]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find release-assets -type f \\( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \\) -exec cp {} dist/ \\;
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 5
+          ls -lh dist
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: fork-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: SimpleLive build ${{ github.run_number }}
+          generate_release_notes: false
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            iOS IPA is unsigned; Windows ZIP is portable; Android TV APKs are release-signed.
+          files: dist/*
+          fail_on_unmatched_files: true
