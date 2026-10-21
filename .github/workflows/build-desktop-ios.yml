@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find release-assets -type f \\( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \\) -exec cp {} dist/ \\;
+          find release-assets -type f \( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \) -exec cp {} dist/ \;
           test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 5
           ls -lh dist
       - name: Publish release
