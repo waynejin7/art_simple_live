@@ -46,6 +46,24 @@ jobs:
       - name: Dependencies
         working-directory: simple_live_app
         run: flutter pub get
+      - name: Fix unavailable upstream libmpv archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cmakePath = 'third_party/media_kit_libs_windows_video/windows/CMakeLists.txt'
+          $content = [System.IO.File]::ReadAllText((Resolve-Path $cmakePath))
+          $oldRelease = 'set(LIBMPV_RELEASE "20260828")'
+          $oldRevision = 'set(LIBMPV_REVISION "182fa6ca49")'
+          $oldHash = 'set(LIBMPV_SHA256 "9efd04d351e09eca350d01da1b8b0c406537c037537111ba65ab43c91905635b")'
+          if ($content.Contains($oldRelease) -and $content.Contains($oldRevision) -and $content.Contains($oldHash)) {
+            $content = $content.Replace($oldRelease, 'set(LIBMPV_RELEASE "20261021")')
+            $content = $content.Replace($oldRevision, 'set(LIBMPV_REVISION "e471496c56")')
+            $content = $content.Replace($oldHash, 'set(LIBMPV_SHA256 "efc719eff3dc5954b4a5efc800632808bcec01cc9034940dd14e5eb7fe9ea633")')
+            [System.IO.File]::WriteAllText((Resolve-Path $cmakePath), $content, [System.Text.UTF8Encoding]::new($false))
+            Write-Host 'Updated missing upstream libmpv archive to GitHub verified 20261021 asset.'
+          } else {
+            Write-Host 'Upstream libmpv reference differs; leaving it unchanged.'
+          }
       - name: Build Windows
         working-directory: simple_live_app
         run: flutter build windows --release
