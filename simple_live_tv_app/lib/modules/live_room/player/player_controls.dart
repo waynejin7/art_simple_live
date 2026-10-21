@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -5,10 +7,12 @@ import 'package:get/get.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:simple_live_tv_app/app/app_focus_node.dart';
 import 'package:simple_live_tv_app/app/app_style.dart';
+import 'package:simple_live_tv_app/app/constant.dart';
 import 'package:simple_live_tv_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
 import 'package:simple_live_tv_app/app/utils.dart';
 import 'package:simple_live_tv_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_tv_app/services/db_service.dart';
 import 'package:simple_live_tv_app/services/follow_user_service.dart';
 import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:simple_live_tv_app/widgets/card/anchor_card.dart';
@@ -24,6 +28,7 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
     children: [
       Container(),
       buildDanmuView(videoState, controller),
+      _buildLiveEventFlowOverlay(controller),
       // 点击播放器打开设置
       Positioned.fill(
         child: GestureDetector(onTap: () => showPlayerSettings(controller)),
@@ -89,6 +94,17 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppStyle.textStyleWhite.copyWith(fontSize: 24.w),
+                      ),
+                      Obx(
+                        () => Text(
+                          controller.site.id == Constant.kDouyin
+                              ? "在线 ${Utils.onlineToString(controller.online.value)}  ·  累计 ${Utils.onlineToString(controller.totalViewers.value)}"
+                              : "在线 ${Utils.onlineToString(controller.online.value)}",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              AppStyle.textStyleWhite.copyWith(fontSize: 20.w),
+                        ),
                       ),
                     ],
                   ),
@@ -186,6 +202,14 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
                     Text("下一频道", style: AppStyle.textStyleWhite),
                     AppStyle.hGap32,
                     Icon(
+                      Icons.play_circle_fill,
+                      color: Colors.white,
+                      size: 40.w,
+                    ),
+                    AppStyle.hGap16,
+                    Text("暂停/继续", style: AppStyle.textStyleWhite),
+                    AppStyle.hGap32,
+                    Icon(
                       Icons.arrow_circle_left_outlined,
                       color: Colors.white,
                       size: 40.w,
@@ -213,6 +237,62 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
   );
 }
 
+Widget _buildLiveEventFlowOverlay(LiveRoomController controller) {
+  return Positioned(
+    right: 32.w,
+    top: 108.w,
+    child: Obx(() {
+      final settings = AppSettingsController.instance;
+      if (!settings.liveEventFlowEnable.value ||
+          !settings.liveEventFlowOverlayEnable.value ||
+          controller.liveEventFlows.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      return IgnorePointer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (final item in controller.liveEventFlows.take(3))
+              TweenAnimationBuilder<double>(
+                key: ValueKey("${item.text}-${item.count}"),
+                tween: Tween(begin: 1.08, end: 1),
+                duration: const Duration(milliseconds: 180),
+                builder: (context, scale, child) {
+                  return Transform.scale(
+                    scale: scale,
+                    alignment: Alignment.centerRight,
+                    child: child,
+                  );
+                },
+                child: Container(
+                  constraints: BoxConstraints(maxWidth: 420.w),
+                  margin: EdgeInsets.only(bottom: 10.w),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 18.w,
+                    vertical: 10.w,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.58),
+                    borderRadius: BorderRadius.circular(6.w),
+                  ),
+                  child: Text(
+                    item.displayText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppStyle.textStyleWhite.copyWith(
+                      fontSize: 24.w,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }),
+  );
+}
+
 Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
   var padding = MediaQuery.of(videoState.context).padding;
   controller.danmakuView ??= DanmakuScreen(
@@ -220,7 +300,10 @@ Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
     createdController: controller.initDanmakuController,
     option: DanmakuOption(
       fontSize: AppSettingsController.instance.danmuSize.value.w,
+      fontFamily: Platform.isWindows ? "Microsoft YaHei" : null,
       area: AppSettingsController.instance.danmuArea.value,
+      lineHeight: 1.25,
+      emojiScale: 1.4,
       duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
       opacity: AppSettingsController.instance.danmuOpacity.value,
     ),
@@ -326,6 +409,8 @@ void showPlayerSettings(LiveRoomController controller) {
   controller.focusNode.unfocus();
 
   var followFocusNode = AppFocusNode()..isFoucsed.value = true;
+  var specialFollowFocusNode = AppFocusNode();
+  var followTagFocusNode = AppFocusNode();
   var qualityFoucsNode = AppFocusNode();
   var lineFoucsNode = AppFocusNode();
   var scaleFoucsNode = AppFocusNode();
@@ -384,6 +469,42 @@ void showPlayerSettings(LiveRoomController controller) {
                   },
                 ),
               ),
+              AppStyle.vGap24,
+              Obx(
+                () => SettingsItemWidget(
+                  foucsNode: specialFollowFocusNode,
+                  autofocus: specialFollowFocusNode.isFoucsed.value,
+                  title: "特别关注",
+                  items: const {false: "否", true: "是"},
+                  value: controller.specialFollowed.value,
+                  onChanged: (e) {
+                    controller.toggleSpecialFollow(e);
+                  },
+                ),
+              ),
+              AppStyle.vGap24,
+              Obx(
+                () {
+                  final options = FollowUserService.instance.tagOptions;
+                  final items = <int, String>{
+                    for (var i = 0; i < options.length; i++) i: options[i],
+                  };
+                  final current = DBService.instance.followBox
+                      .get("${controller.rxSite.value.id}_${controller.roomId}")
+                      ?.tag;
+                  final value =
+                      options.indexOf(current ?? FollowUserService.allTagName);
+                  return SettingsItemWidget(
+                    foucsNode: followTagFocusNode,
+                    title: "关注标签",
+                    items: items,
+                    value: value < 0 ? 0 : value,
+                    onChanged: (e) {
+                      controller.setCurrentFollowTag(options[e as int]);
+                    },
+                  );
+                },
+              ),
 
               Divider(color: Colors.grey.withAlpha(50), height: 36.w),
               AppStyle.vGap24,
@@ -412,6 +533,14 @@ void showPlayerSettings(LiveRoomController controller) {
                   onChanged: (e) {
                     Get.back();
                     controller.currentQuality = e;
+                    // 保存清晰度记忆。
+                    if (e >= 0 && e < controller.qualites.length) {
+                      AppSettingsController.instance.saveQualityMemory(
+                        siteId: controller.site.id,
+                        qualityName: controller.qualites[e].quality,
+                        offsetFromTop: e,
+                      );
+                    }
                     controller.getPlayUrl();
                   },
                 ),
@@ -497,6 +626,11 @@ void showPlayerSettings(LiveRoomController controller) {
                     56.0: "56",
                     64.0: "64",
                     72.0: "72",
+                    96.0: "96",
+                    120.0: "120",
+                    144.0: "144",
+                    168.0: "168",
+                    192.0: "192",
                   },
                   value: AppSettingsController.instance.danmuSize.value,
                   onChanged: (e) {
@@ -504,6 +638,8 @@ void showPlayerSettings(LiveRoomController controller) {
                     controller.updateDanmuOption(
                       controller.danmakuController?.option.copyWith(
                         fontSize: (e as double).w,
+                        lineHeight: 1.25,
+                        emojiScale: 1.4,
                       ),
                     );
                   },
@@ -516,6 +652,8 @@ void showPlayerSettings(LiveRoomController controller) {
                   autofocus: danmakuSpeedFoucsNode.isFoucsed.value,
                   title: "弹幕速度",
                   items: {
+                    30.0: "极慢",
+                    24.0: "超慢",
                     18.0: "很慢",
                     14.0: "较慢",
                     12.0: "慢",
@@ -523,6 +661,8 @@ void showPlayerSettings(LiveRoomController controller) {
                     8.0: "快",
                     6.0: "较快",
                     4.0: "很快",
+                    2.0: "极速",
+                    1.0: "最快",
                   },
                   value: AppSettingsController.instance.danmuSpeed.value,
                   onChanged: (e) {
@@ -595,9 +735,13 @@ void showPlayerSettings(LiveRoomController controller) {
 }
 
 void showFollowUser(LiveRoomController controller) {
+  // 打开弹层时固化快照：刷新过程中列表不再整体重建，
+  // 焦点不会因条目位移/重建而丢失。
+  final livingItems = FollowUserService.instance.livingList.toList();
+  final focusNodes = <String, AppFocusNode>{};
   var currentIndex = 0;
   if (controller.followed.value) {
-    currentIndex = FollowUserService.instance.livingList.indexWhere(
+    currentIndex = livingItems.indexWhere(
       (e) =>
           e.id ==
           "${controller.rxSite.value.id}_${controller.detail.value?.roomId}",
@@ -606,6 +750,19 @@ void showFollowUser(LiveRoomController controller) {
       currentIndex = 0;
     }
   }
+  final followScrollController = ScrollController(
+    initialScrollOffset: currentIndex * 172.w,
+  );
+  final currentFocusNode = AppFocusNode();
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (currentIndex > 0 && followScrollController.hasClients) {
+      followScrollController.jumpTo(
+        (currentIndex * 172.w)
+            .clamp(0.0, followScrollController.position.maxScrollExtent),
+      );
+    }
+    currentFocusNode.requestFocus();
+  });
 
   Utils.showSystemRightDialog(
     width: 800.w,
@@ -620,8 +777,7 @@ void showFollowUser(LiveRoomController controller) {
               focusNode: AppFocusNode(),
               iconData: Icons.arrow_back,
               text: "返回",
-              autofocus: currentIndex == 0 &&
-                  FollowUserService.instance.livingList.isEmpty,
+              autofocus: currentIndex == 0 && livingItems.isEmpty,
               onTap: () {
                 // Utils.hideRightDialog();
                 Get.back();
@@ -642,44 +798,49 @@ void showFollowUser(LiveRoomController controller) {
         Expanded(
           child: Stack(
             children: [
-              Obx(
-                () => ListView.separated(
-                  itemCount: FollowUserService.instance.livingList.length,
-                  separatorBuilder: (context, index) => AppStyle.vGap32,
-                  padding: AppStyle.edgeInsetsA40.copyWith(
-                    left: 48.w,
-                    right: 48.w,
-                  ),
-                  itemBuilder: (_, i) {
-                    var item = FollowUserService.instance.livingList[i];
-                    var site = Sites.allSites[item.siteId]!;
-                    return AnchorCard(
-                      face: item.face,
-                      name: item.userName,
-                      siteId: item.siteId,
-                      liveStatus: item.liveStatus.value,
-                      roomId: item.roomId,
-                      autofocus: i == currentIndex,
-                      onTap: () {
-                        controller.resetRoom(site, item.roomId);
-                        Get.back();
-                      },
-                    );
-                  },
+              ListView.separated(
+                controller: followScrollController,
+                itemCount: livingItems.length,
+                separatorBuilder: (context, index) => AppStyle.vGap32,
+                padding: AppStyle.edgeInsetsA40.copyWith(
+                  left: 48.w,
+                  right: 48.w,
                 ),
+                itemBuilder: (_, i) {
+                  var item = livingItems[i];
+                  var site = Sites.allSites[item.siteId]!;
+                  final isCurrent = i == currentIndex;
+                  return AnchorCard(
+                    key: ValueKey(item.id),
+                    face: item.face,
+                    name: item.userName,
+                    siteId: item.siteId,
+                    liveStatus: item.liveStatus.value,
+                    roomId: item.roomId,
+                    autofocus: isCurrent,
+                    focusNode: isCurrent
+                        ? currentFocusNode
+                        : focusNodes.putIfAbsent(item.id, AppFocusNode.new),
+                    onTap: () {
+                      controller.resetRoom(site, item.roomId);
+                      Get.back();
+                    },
+                  );
+                },
               ),
-              Obx(
-                () => Visibility(
-                  visible: FollowUserService.instance.list.isEmpty,
-                  child: const AppEmptyWidget(text: "关注列表为空，快去关注一些主播吧"),
-                ),
-              ),
+              if (livingItems.isEmpty)
+                const AppEmptyWidget(text: "关注列表为空，快去关注一些主播吧"),
             ],
           ),
         ),
       ],
     ),
   ).then((value) {
+    followScrollController.dispose();
+    currentFocusNode.dispose();
+    for (final node in focusNodes.values) {
+      node.dispose();
+    }
     // 还原焦点
     controller.focusNode.requestFocus();
   });

@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git remote add upstream https://github.com/xiaoyaocz/dart_simple_live.git
+          git remote add upstream https://github.com/June6699/dart_simple_live.git
           git fetch upstream master
           if git merge-base --is-ancestor upstream/master HEAD; then
             echo "Already up to date."

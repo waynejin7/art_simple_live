@@ -2,6 +2,8 @@ name: Build iOS Windows and Android TV
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
 
 permissions:
   contents: write
@@ -13,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.3'
+          flutter-version: '3.41.9'
           cache: true
       - name: Dependencies
         working-directory: simple_live_app
@@ -39,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.3'
+          flutter-version: '3.41.9'
           cache: true
       - name: Dependencies
         working-directory: simple_live_app
@@ -67,7 +69,7 @@ jobs:
           java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.3'
+          flutter-version: '3.41.9'
           cache: true
       - name: Dependencies
         working-directory: simple_live_tv_app
