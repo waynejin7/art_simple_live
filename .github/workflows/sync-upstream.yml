@@ -33,7 +33,11 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit upstream/master
+          # GITHUB_TOKEN cannot create/update workflow files on push.
+          # Keep this fork's workflow definitions and only sync upstream app code.
+          git merge --no-commit --no-ff upstream/master
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+          git commit -m "chore: sync upstream (preserve fork workflows)"
           git push origin HEAD:master
       - name: Trigger build after sync
         if: success()
