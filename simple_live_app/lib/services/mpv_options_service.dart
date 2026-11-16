@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -7,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
 class MpvOptionsService {
   static const Map<String, String> profileLabels = {
@@ -47,6 +49,18 @@ class MpvOptionsService {
       "correct-downscaling": "yes",
       "sigmoid-upscaling": "yes",
       "deband": "yes",
+    },
+    // 省电模式下的画质档替代：spline36 缩放，避开 gpu-next 与
+    // EWA/sigmoid/deband 等每帧额外着色器 pass
+    "qualityPowerSave": {
+      "hwdec": "auto-safe",
+      "vo": "gpu",
+      "scale": "spline36",
+      "cscale": "spline36",
+      "dscale": "mitchell",
+      "correct-downscaling": "no",
+      "sigmoid-upscaling": "no",
+      "deband": "no",
     },
   };
 
@@ -89,6 +103,23 @@ class MpvOptionsService {
     for (final key in confOptions.keys) {
       source[key] = "conf";
     }
+    if (Platform.isWindows) {
+      final requestedHwdec = options["hwdec"];
+      final decision = WindowsVideoAccelerationPolicy.resolve(
+        hardwareDecode: settings.hardwareDecode.value,
+        renderingAcceleration: settings.videoRenderingAcceleration.value,
+        requestedHwdec: requestedHwdec,
+      );
+      if (decision.hwdec != null) {
+        options["hwdec"] = decision.hwdec!;
+      }
+      final override = decision.sourceOverride;
+      if (override != null) {
+        source["hwdec"] = override == 'hardwareDecode:off'
+            ? override
+            : '$override(requested=$requestedHwdec, source=${source["hwdec"] ?? "default"})';
+      }
+    }
     return MpvEffectiveOptions(options, source);
   }
 
@@ -105,7 +136,9 @@ class MpvOptionsService {
     if (!Platform.isAndroid) {
       return VideoControllerConfiguration(
         hwdec: _desktopVideoControllerHwdec(effectiveOptions),
-        enableHardwareAcceleration: settings.hardwareDecode.value,
+        enableHardwareAcceleration: Platform.isWindows
+            ? settings.videoRenderingAcceleration.value
+            : settings.hardwareDecode.value,
       );
     }
     return VideoControllerConfiguration(
@@ -124,9 +157,16 @@ class MpvOptionsService {
     'stream-lavf-o':
         'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10',
     'cache': 'yes',
-    'demuxer-readahead-secs': '2',
-    'demuxer-max-bytes': '16MiB',
-    'demuxer-max-back-bytes': '8MiB',
+    'demuxer-readahead-secs': '10',
+    'demuxer-max-bytes': '64MiB',
+    'demuxer-max-back-bytes': '32MiB',
+  };
+
+  /// 音频默认参数：扩大 mpv softvol 范围以支持 >100% 的音量增益档
+  /// （media_kit 的 setVolume 直透 mpv volume 属性，上限由 volume-max 决定）。
+  /// 用户在高级参数/mpv.conf 中设置的同名参数会覆盖该默认值。
+  static const Map<String, String> audioDefaultOptions = {
+    'volume-max': '300',
   };
 
   static Future<void> applyToPlayer(Player player) async {
@@ -138,6 +178,7 @@ class MpvOptionsService {
     // MixWithOthers，与 AppDelegate 的 .playback 类别保持一致。
     if (Platform.isIOS) {
       final iosOptions = <String, String>{
+        ...audioDefaultOptions,
         ...networkDefaultOptions,
         'audio-exclusive': 'yes',
       };
@@ -150,7 +191,8 @@ class MpvOptionsService {
       }
       return;
     }
-    final options = Map<String, String>.from(networkDefaultOptions)
+    final options = Map<String, String>.from(audioDefaultOptions)
+      ..addAll(networkDefaultOptions)
       ..addAll(effectiveOptions())
       ..remove("vo")
       ..remove("hwdec");
@@ -165,7 +207,16 @@ class MpvOptionsService {
 
   static Map<String, String> _profileOptionsForPlatform(String profile) {
     Map<String, String> base;
-    if (profile == "balanced") {
+    final powerSave = AppSettingsController.instance.powerSaveMode.value;
+    if (powerSave) {
+      // 省电模式：均衡→bilinear，画质→spline36，流畅档本就是 bilinear 不变
+      final powerSaveKey = profile == "balanced"
+          ? "performance"
+          : profile == "quality"
+              ? "qualityPowerSave"
+              : profile;
+      base = desktopProfiles[powerSaveKey] ?? desktopProfiles["performance"]!;
+    } else if (profile == "balanced") {
       base = Platform.isWindows
           ? desktopProfiles["balanced"]!
           : desktopProfiles["balancedDesktop"]!;
@@ -186,6 +237,9 @@ class MpvOptionsService {
   static String diagnosticsSummary() {
     final effectiveOptions = effectiveOptionsWithSource();
     final options = effectiveOptions.options;
+    final renderingSummary = Platform.isWindows
+        ? "renderAccelerationRequested=${AppSettingsController.instance.videoRenderingAcceleration.value}, "
+        : "";
     String value(String key) {
       final optionValue = options[key];
       final source = effectiveOptions.source[key];
@@ -196,8 +250,9 @@ class MpvOptionsService {
     }
 
     return "profile=${AppSettingsController.instance.mpvProfile.value}, "
+        "powerSave=${AppSettingsController.instance.powerSaveMode.value}, "
         "hardwareDecode=${AppSettingsController.instance.hardwareDecode.value}, "
-        "vo=${value("vo")}, hwdec=${value("hwdec")}, "
+        "${renderingSummary}vo=${value("vo")}, hwdec=${value("hwdec")}, "
         "mpvOptions=${options.length}";
   }
 
@@ -225,7 +280,7 @@ class MpvOptionsService {
       if (!file.existsSync()) {
         return const {};
       }
-      return parseOptions(file.readAsStringSync());
+      return parseOptions(file.readAsStringSync(encoding: utf8));
     } catch (e) {
       Log.d("read mpv.conf failed: $e");
       return const {};

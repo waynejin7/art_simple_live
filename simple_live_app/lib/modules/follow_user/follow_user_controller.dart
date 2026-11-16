@@ -42,6 +42,7 @@ class FollowGroupOption {
 
 class FollowUserController extends BasePageController<FollowUser> {
   static const int paginationThreshold = 400;
+  static const double backToTopOffset = 400;
   static const String allTagId = "0";
 
   /// 伪标签：按直播状态自动归类，不承载成员关系
@@ -54,11 +55,14 @@ class FollowUserController extends BasePageController<FollowUser> {
   var selectedGroupId = "all".obs;
   var selectedTagId = allTagId.obs;
   var searchKeyword = "".obs;
+  RxBool get tagPanelExpanded =>
+      AppSettingsController.instance.followTagPanelExpanded;
   var multiSelectMode = false.obs;
   RxSet<String> selectedMultiRoomKeys = <String>{}.obs;
   var currentDisplayPage = 1.obs;
   var totalDisplayPages = 1.obs;
   var paginationEnabled = false.obs;
+  var showBackToTop = false.obs;
   RxList<FollowUserTag> tagList = [
     FollowUserTag(id: "0", tag: "全部", userId: []),
     FollowUserTag(id: "1", tag: "直播中", userId: []),
@@ -70,6 +74,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   void onInit() {
+    scrollController.addListener(updateBackToTopVisibility);
     pageSize = AppSettingsController.instance.followPageSize.value;
     _restoreGroupSelection();
     unawaited(_loadInitialData());
@@ -87,6 +92,28 @@ class FollowUserController extends BasePageController<FollowUser> {
       filterData();
     });
     super.onInit();
+  }
+
+  void updateBackToTopVisibility() {
+    if (isClosed) {
+      return;
+    }
+    if (scrollController.positions.length != 1) {
+      showBackToTop.value = false;
+      return;
+    }
+    final position = scrollController.position;
+    showBackToTop.value =
+        position.hasPixels && position.pixels >= backToTopOffset;
+  }
+
+  void scrollBackToTop() {
+    if (scrollController.positions.length != 1 ||
+        !scrollController.position.hasPixels ||
+        scrollController.offset <= 0) {
+      return;
+    }
+    scrollToTopOrRefresh();
   }
 
   Future<void> _loadInitialData() async {
@@ -418,12 +445,14 @@ class FollowUserController extends BasePageController<FollowUser> {
     selectedTagId.value = tag.id;
     currentDisplayPage.value = 1;
     filterData();
+    _jumpToTop();
   }
 
   void setSearchKeyword(String value) {
     searchKeyword.value = value.trim();
     currentDisplayPage.value = 1;
     filterData();
+    _jumpToTop();
   }
 
   void clearSearchKeyword() {
@@ -433,6 +462,7 @@ class FollowUserController extends BasePageController<FollowUser> {
     searchKeyword.value = "";
     currentDisplayPage.value = 1;
     filterData();
+    _jumpToTop();
   }
 
   void _requestVisiblePreviews(List<FollowUser> items) {
@@ -452,6 +482,7 @@ class FollowUserController extends BasePageController<FollowUser> {
     AppSettingsController.instance.setFollowOnlyLive(value);
     currentDisplayPage.value = 1;
     filterData();
+    _jumpToTop();
   }
 
   void setRefreshOnEnter(bool value) {
@@ -468,12 +499,14 @@ class FollowUserController extends BasePageController<FollowUser> {
     selectedGroupId.value = "all";
     _saveGroupSelection();
     filterData();
+    _jumpToTop();
   }
 
   void setGroupOption(FollowGroupOption option) {
     selectedGroupId.value = option.id;
     _saveGroupSelection();
     filterData();
+    _jumpToTop();
   }
 
   void _saveGroupSelection() {
@@ -483,6 +516,18 @@ class FollowUserController extends BasePageController<FollowUser> {
           : "liveStatus",
       groupId: selectedGroupId.value,
     );
+  }
+
+  void toggleTagPanel() {
+    AppSettingsController.instance
+        .setFollowTagPanelExpanded(!tagPanelExpanded.value);
+  }
+
+  /// 切换筛选后内容整组替换，停留在原滚动位置只会停在新内容半途。
+  void _jumpToTop() {
+    if (scrollController.hasClients) {
+      scrollController.jumpTo(0);
+    }
   }
 
   void removeItem(FollowUser item) async {
@@ -498,7 +543,9 @@ class FollowUserController extends BasePageController<FollowUser> {
       updateTag(tag);
     }
     await DBService.instance.followBox.delete(item.id);
-    refreshData();
+    // #163 取消关注后仅本地移除，不再触发全量开播状态刷新，避免频繁请求触发风控
+    await refreshData(forceStatus: false);
+    FollowService.instance.filterData();
   }
 
   void updateItem(FollowUser item) {
@@ -787,6 +834,7 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   void onClose() {
+    scrollController.removeListener(updateBackToTopVisibility);
     onUpdatedIndexedStream?.cancel();
     onUpdatedListStream?.cancel();
     super.onClose();

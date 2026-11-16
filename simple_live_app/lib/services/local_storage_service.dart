@@ -9,8 +9,31 @@ class LocalStorageService extends GetxService {
   static const String kPlayerScaleMode = "ScaleMode";
   static const String kSiteSort = "SiteSort";
   static const String kHomeSort = "HomeSort";
+
+  /// 完整排序（含新版本新增的入口/平台），旧版本读不懂的 key 不写进 kSiteSort/kHomeSort
+  static const String kSiteSortV2 = "SiteSortV2";
+  static const String kHomeSortV2 = "HomeSortV2";
+
+  /// 主页底栏中隐藏的入口 key（逗号分隔），\"user\" 始终可见
+  static const String kHomeHidden = "HomeHidden";
+
+  /// 分类页中隐藏的平台 key（逗号分隔），至少保留一个可见
+  static const String kSiteHidden = "SiteHidden";
+  static const String kIptvDefaultInited = "IptvDefaultInited";
+  static const String kIptvSourceEnabled = "IptvSourceEnabled";
+  static const String kIptvCustomSources = "IptvCustomSources";
+  static const String kIptvDeletedSources = "IptvDeletedSources";
+
+  /// IPTV 聚合频道缓存（JSON，含时间戳），冷启动秒开与断网兜底
+  static const String kIptvAggregatedCache = "IptvAggregatedCache";
+
+  /// IPTV 上次手动选择的线路源名称，起播时优先命中
+  static const String kIptvPreferredLineSource = "IptvPreferredLineSource";
   static const String kLiveRoomTabSort = "LiveRoomTabSort";
   static const String kLiveRoomQuickAccessSort = "LiveRoomQuickAccessSort";
+
+  /// 完整快捷入口排序；kLiveRoomQuickAccessSort 只写旧版本认识的子集
+  static const String kLiveRoomQuickAccessSortV2 = "LiveRoomQuickAccessSortV2";
   static const String kLiveRoomQuickAccessEnabled =
       "LiveRoomQuickAccessEnabled";
   static const String kLiveRoomShortcutFullScreen =
@@ -23,8 +46,7 @@ class LocalStorageService extends GetxService {
   static const String kLiveRoomShortcutVolumeUp = "LiveRoomShortcutVolumeUp";
   static const String kLiveRoomShortcutVolumeDown =
       "LiveRoomShortcutVolumeDown";
-  static const String kLiveRoomShortcutPlayPause =
-      "LiveRoomShortcutPlayPause";
+  static const String kLiveRoomShortcutPlayPause = "LiveRoomShortcutPlayPause";
   static const String kLastSearchSiteId = "LastSearchSiteId";
   static const String kFollowGroupMode = "FollowGroupMode";
   static const String kFollowSelectedGroupId = "FollowSelectedGroupId";
@@ -32,6 +54,7 @@ class LocalStorageService extends GetxService {
   static const String kFollowOnlyLive = "FollowOnlyLive";
   static const String kFollowRefreshOnEnter = "FollowRefreshOnEnter";
   static const String kFollowShowLiveCover = "FollowShowLiveCover";
+  static const String kFollowTagPanelExpanded = "FollowTagPanelExpanded";
   static const String kRememberWindowPlacement = "RememberWindowPlacement";
   static const String kDesktopWindowBounds = "DesktopWindowBounds";
   static const String kDesktopWindowMaximized = "DesktopWindowMaximized";
@@ -46,6 +69,8 @@ class LocalStorageService extends GetxService {
   static const String kDanmuDelay = "DanmuDelay";
   static const String kDanmuOpacity = "DanmuOpacity";
   static const String kDanmuStrokeWidth = "DanmuStrokeWidth";
+  static const String kDanmuStrokeEnable = "DanmuStrokeEnable";
+  static const String kDanmuMaxFps = "DanmuMaxFps";
   static const String kDanmuHideScroll = "DanmuHideScroll";
   static const String kDanmuHideBottom = "DanmuHideBottom";
   static const String kDanmuHideTop = "DanmuHideTop";
@@ -59,6 +84,10 @@ class LocalStorageService extends GetxService {
   static const String kDanmuFontWeight = "DanmuFontWeight";
   static const String kContributionRankEnable = "ContributionRankEnable";
   static const String kHardwareDecode = "HardwareDecode";
+  static const String kVideoRenderingAcceleration =
+      "VideoRenderingAcceleration";
+  static const String kMobileTopExtraInset = "MobileTopExtraInset";
+  static const String kMobileBottomExtraInset = "MobileBottomExtraInset";
   static const String kIosOriginalQualityPowerSaving =
       "IosOriginalQualityPowerSaving";
   static const String kChatTextSize = "ChatTextSize";
@@ -71,6 +100,7 @@ class LocalStorageService extends GetxService {
   static const String kAutoExitDuration = "AutoExitDuration";
   static const String kRoomAutoExitDuration = "RoomAutoExitDuration";
   static const String kPlayerCompatMode = "PlayerCompatMode";
+  static const String kPowerSaveMode = "PowerSaveMode";
   static const String kPlayerAutoPause = "PlayerAutoPause";
   static const String kAllowBackgroundPlayback = "AllowBackgroundPlayback";
   static const String kPlayerFullscreenOrientation =
@@ -96,6 +126,7 @@ class LocalStorageService extends GetxService {
       "LiveEventFlowDisplaySeconds";
   static const String kLiveEventFlowMinCount = "LiveEventFlowMinCount";
   static const String kPlayerVolume = "PlayerVolume";
+  static const String kVolumeBoostEnable = "VolumeBoostEnable";
   static const String kPIPHideDanmu = "PIPHideDanmu";
   static const String kPIPHideDanmuDefaultMigrated =
       "PIPHideDanmuDefaultMigrated";
@@ -159,14 +190,26 @@ class LocalStorageService extends GetxService {
   // 小窗弹幕设置
   static const String kSmallWindowDanmuScale = "SmallWindowDanmuScale";
   static const String kSmallWindowDanmuMaxLines = "SmallWindowDanmuMaxLines";
-  static const String kSmallWindowDanmuAutoTransparent = "SmallWindowDanmuAutoTransparent";
+  static const String kSmallWindowDanmuAutoTransparent =
+      "SmallWindowDanmuAutoTransparent";
 
   // PIP弹幕设置
   static const String kEnablePipDanmu = "EnablePipDanmu";
   static const String kPipDanmuScale = "PipDanmuScale";
 
+  // iOS 小窗（画中画）
+  static const String kPipKeepBackgroundVideo = "PipKeepBackgroundVideo";
+
   // SuperChat 全屏滚动
-  static const String kSuperChatScrollInFullscreen = "SuperChatScrollInFullscreen";
+  static const String kSuperChatScrollInFullscreen =
+      "SuperChatScrollInFullscreen";
+
+  // 全屏四角时钟
+  static const String kPlayerClockEnable = "PlayerClockEnable";
+  static const String kPlayerClockPosition = "PlayerClockPosition";
+
+  // 自定义分区列表（JSON）
+  static const String kCustomCategories = "CustomCategories";
 
   late Box settingsBox;
   late Box<String> shieldBox;

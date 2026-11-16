@@ -1,9 +1,12 @@
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/utils.dart';
 
 class IndexedSettingsController extends GetxController {
   RxList<String> siteSort = RxList<String>();
   RxList<String> homeSort = RxList<String>();
+  RxSet<String> homeHidden = <String>{}.obs;
+  RxSet<String> siteHidden = <String>{}.obs;
   RxList<String> liveRoomTabSort = RxList<String>();
   RxList<String> liveRoomQuickAccessSort = RxList<String>();
   RxSet<String> liveRoomQuickAccessEnabled = <String>{}.obs;
@@ -13,6 +16,8 @@ class IndexedSettingsController extends GetxController {
   void onInit() {
     siteSort = AppSettingsController.instance.siteSort;
     homeSort = AppSettingsController.instance.homeSort;
+    homeHidden = AppSettingsController.instance.homeHidden;
+    siteHidden = AppSettingsController.instance.siteHidden;
     liveRoomTabSort = AppSettingsController.instance.liveRoomTabSort;
     liveRoomQuickAccessSort =
         AppSettingsController.instance.liveRoomQuickAccessSort;
@@ -32,6 +37,21 @@ class IndexedSettingsController extends GetxController {
     siteSort.insert(newIndex, item);
     // ignore: invalid_use_of_protected_member
     AppSettingsController.instance.setSiteSort(siteSort.value);
+  }
+
+  void setHomeVisible(String key, bool visible) {
+    AppSettingsController.instance.setHomeVisible(key, visible);
+  }
+
+  Future<void> setSiteVisible(String key, bool visible) async {
+    final applied = AppSettingsController.instance.setSiteVisible(key, visible);
+    if (!applied) {
+      // “至少保留一个平台”守卫拦截，弹窗说明而不是静默无效
+      await Utils.showMessageDialog(
+        "至少需要保留一个可见平台用于分类页展示，请先恢复其他平台后再隐藏。",
+        title: "无法隐藏",
+      );
+    }
   }
 
   void updateHomeSort(int oldIndex, int newIndex) {

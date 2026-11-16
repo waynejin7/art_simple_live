@@ -4,10 +4,13 @@ import 'dart:io';
 
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/desktop_startup_args.dart';
+import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/mobile_safe_insets.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/models/danmu_shield_preset.dart';
 import 'package:simple_live_app/services/background_playback_service.dart';
+import 'package:simple_live_app/services/custom_category_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:path/path.dart' as p;
@@ -111,6 +114,10 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kDanmuUserShieldEnable, true);
     danmuStrokeWidth.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuStrokeWidth, 2.0);
+    danmuStrokeEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kDanmuStrokeEnable, true);
+    danmuMaxFps.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kDanmuMaxFps, 0);
     danmuTopMargin.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuTopMargin, 0.0);
     danmuBottomMargin.value = LocalStorageService.instance
@@ -122,6 +129,16 @@ class AppSettingsController extends GetxController {
 
     hardwareDecode.value = LocalStorageService.instance
         .getValue(LocalStorageService.kHardwareDecode, true);
+    videoRenderingAcceleration.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kVideoRenderingAcceleration, true);
+    mobileTopExtraInset.value = _normalizeMobileExtraInset(
+      LocalStorageService.instance
+          .getValue<dynamic>(LocalStorageService.kMobileTopExtraInset, 0),
+    );
+    mobileBottomExtraInset.value = _normalizeMobileExtraInset(
+      LocalStorageService.instance
+          .getValue<dynamic>(LocalStorageService.kMobileBottomExtraInset, 0),
+    );
     iosOriginalQualityPowerSaving.value = LocalStorageService.instance.getValue(
       LocalStorageService.kIosOriginalQualityPowerSaving,
       true,
@@ -153,6 +170,9 @@ class AppSettingsController extends GetxController {
 
     playerCompatMode.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerCompatMode, false);
+
+    powerSaveMode.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPowerSaveMode, false);
 
     playerAutoPause.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPlayerAutoPause, false);
@@ -195,8 +215,19 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kEnablePipDanmu, false);
     pipDanmuScale.value = LocalStorageService.instance
         .getValue(LocalStorageService.kPipDanmuScale, 0.75);
+    // iOS 小窗（画中画）：后台保持画面
+    pipKeepBackgroundVideo.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPipKeepBackgroundVideo, true);
     superChatScrollInFullscreen.value = LocalStorageService.instance
         .getValue(LocalStorageService.kSuperChatScrollInFullscreen, false);
+    playerClockEnable.value = LocalStorageService.instance
+        .getValue(LocalStorageService.kPlayerClockEnable, false);
+    playerClockPosition.value = _normalizePlayerClockPosition(
+      LocalStorageService.instance.getValue(
+        LocalStorageService.kPlayerClockPosition,
+        1,
+      ),
+    );
     liveEventFlowEnable.value = LocalStorageService.instance.getValue(
       LocalStorageService.kLiveEventFlowEnable,
       false,
@@ -265,6 +296,10 @@ class AppSettingsController extends GetxController {
     playerVolume.value = LocalStorageService.instance.getValue(
       LocalStorageService.kPlayerVolume,
       100.0,
+    );
+    volumeBoostEnable.value = LocalStorageService.instance.getValue(
+      LocalStorageService.kVolumeBoostEnable,
+      false,
     );
     playerGestureControlEnable.value = LocalStorageService.instance.getValue(
       LocalStorageService.kPlayerGestureControlEnable,
@@ -410,6 +445,12 @@ class AppSettingsController extends GetxController {
       LocalStorageService.kFollowShowLiveCover,
       false,
     );
+    // 未手动收起过时默认展开：升级后的老用户仍能看到标签/分组筛选，
+    // 用户一旦显式收起，后续启动按持久化值保持折叠。
+    followTagPanelExpanded.value = LocalStorageService.instance.getValue(
+      LocalStorageService.kFollowTagPanelExpanded,
+      true,
+    );
 
     rememberWindowPlacement.value = LocalStorageService.instance.getValue(
       LocalStorageService.kRememberWindowPlacement,
@@ -428,6 +469,7 @@ class AppSettingsController extends GetxController {
 
     initSiteSort();
     initHomeSort();
+    initHiddenEntries();
     initLiveRoomTabSort();
     initLiveRoomQuickAccessSettings();
     initLiveRoomShortcutSettings();
@@ -452,43 +494,151 @@ class AppSettingsController extends GetxController {
   }
 
   void initSiteSort() {
-    var sort = LocalStorageService.instance
-        .getValue(
-          LocalStorageService.kSiteSort,
-          Sites.allSites.keys.join(","),
-        )
-        .split(",");
-    //如果数量与allSites的数量不一致，将缺失的添加上
-    if (sort.length != Sites.allSites.length) {
-      var keys = Sites.allSites.keys.toList();
-      for (var i = 0; i < keys.length; i++) {
-        if (!sort.contains(keys[i])) {
-          sort.add(keys[i]);
-        }
-      }
-    }
-
-    siteSort.value = sort;
+    final keys = Sites.allSites.keys.toList();
+    siteSort.value = _readSort(
+      LocalStorageService.kSiteSortV2,
+      LocalStorageService.kSiteSort,
+      keys,
+      Sites.legacySiteIds,
+    );
   }
 
   void initHomeSort() {
-    var sort = LocalStorageService.instance
-        .getValue(
-          LocalStorageService.kHomeSort,
-          Constant.allHomePages.keys.join(","),
-        )
-        .split(",");
-    //如果数量与allSites的数量不一致，将缺失的添加上
-    if (sort.length != Constant.allHomePages.length) {
-      var keys = Constant.allHomePages.keys.toList();
-      for (var i = 0; i < keys.length; i++) {
-        if (!sort.contains(keys[i])) {
-          sort.add(keys[i]);
-        }
+    final keys = Constant.allHomePages.keys.toList();
+    homeSort.value = _readSort(
+      LocalStorageService.kHomeSortV2,
+      LocalStorageService.kHomeSort,
+      keys,
+      Constant.legacyHomeSortKeys,
+    );
+  }
+
+  /// 从存储解析排序，并补全当前版本缺失的项
+  List<String> _readSort(
+    String v2Key,
+    String legacyKey,
+    List<String> keys,
+    List<String> legacyKeys,
+  ) {
+    return resolveSortKeys(
+      v2Raw: LocalStorageService.instance.getValue(v2Key, ""),
+      legacyRaw: LocalStorageService.instance.getValue(legacyKey, ""),
+      keys: keys,
+      legacyKeys: legacyKeys,
+    );
+  }
+
+  /// 解析排序：V2 缺失时回退旧键；若旧键内容与 V2 的旧键投影不一致，
+  /// 说明降级期间在旧版本里调整过排序，此时旧键优先，实现“最后写入者生效”。
+  /// 结果均按当前版本的完整集合补全。
+  static List<String> resolveSortKeys({
+    required String v2Raw,
+    required String legacyRaw,
+    required List<String> keys,
+    required List<String> legacyKeys,
+  }) {
+    final legacyValue = legacyRaw.split(",").where(keys.contains).toList();
+    final v2Value = v2Raw.split(",").where(keys.contains).toList();
+    if (v2Value.isEmpty) {
+      return normalizeSortKeys(legacyValue, keys);
+    }
+    if (isLegacySortOverridden(
+      v2Value: v2Value,
+      legacyValue: legacyValue,
+      legacyKeys: legacyKeys,
+    )) {
+      return normalizeSortKeys(legacyValue, keys);
+    }
+    return normalizeSortKeys(v2Value, keys);
+  }
+
+  /// 旧键是否被旧版本改写过：新版本写入时旧键恒等于 V2 的旧键投影，
+  /// 两者不一致即说明旧键最后由旧版本写入
+  static bool isLegacySortOverridden({
+    required List<String> v2Value,
+    required List<String> legacyValue,
+    required List<String> legacyKeys,
+  }) {
+    if (legacyValue.isEmpty) {
+      return false;
+    }
+    final projected = projectLegacyKeys(v2Value, legacyKeys);
+    if (legacyValue.length != projected.length) {
+      return true;
+    }
+    for (var i = 0; i < legacyValue.length; i++) {
+      if (legacyValue[i] != projected[i]) {
+        return true;
       }
     }
+    return false;
+  }
 
-    homeSort.value = sort;
+  /// 过滤未知 key 并按当前版本的完整集合补全
+  static List<String> normalizeSortKeys(
+    List<String> value,
+    List<String> keys,
+  ) {
+    final result = value.where(keys.contains).toList();
+    for (final key in keys) {
+      if (!result.contains(key)) {
+        result.add(key);
+      }
+    }
+    return result;
+  }
+
+  /// 旧版本只认识 legacyKeys，写旧键时投影出这个子集
+  static List<String> projectLegacyKeys(
+    List<String> value,
+    List<String> legacyKeys,
+  ) {
+    return value.where(legacyKeys.contains).toList();
+  }
+
+  /// 异常配置兜底：平台全部被隐藏时，仅恢复排序首位平台可见，其余隐藏项保留
+  static Set<String> clampAllHiddenSites(
+    Set<String> hidden,
+    List<String> sortedKeys,
+  ) {
+    if (sortedKeys.isEmpty || hidden.length < sortedKeys.length) {
+      return hidden;
+    }
+    return Set<String>.of(hidden)..remove(sortedKeys.first);
+  }
+
+  /// 读取底栏入口与平台的隐藏状态；新增入口默认可见
+  void initHiddenEntries() {
+    final homeKeys = Constant.allHomePages.keys.toSet();
+    final siteKeys = Sites.allSites.keys.toSet();
+    homeHidden
+      ..clear()
+      ..addAll(
+        LocalStorageService.instance
+            .getValue(LocalStorageService.kHomeHidden, "")
+            .split(",")
+            .where(
+              (item) =>
+                  item.isNotEmpty &&
+                  item != Constant.kHomeMine &&
+                  homeKeys.contains(item),
+            ),
+      );
+    siteHidden
+      ..clear()
+      ..addAll(
+        LocalStorageService.instance
+            .getValue(LocalStorageService.kSiteHidden, "")
+            .split(",")
+            .where((item) => item.isNotEmpty && siteKeys.contains(item)),
+      );
+    // 平台全部被隐藏会让分类页无标签可建，按损坏配置回退
+    final repaired = clampAllHiddenSites(siteHidden.toSet(), siteSort);
+    if (repaired.length != siteHidden.length) {
+      siteHidden
+        ..clear()
+        ..addAll(repaired);
+    }
   }
 
   void initLiveRoomTabSort() {
@@ -512,21 +662,12 @@ class AppSettingsController extends GetxController {
 
   void initLiveRoomQuickAccessSettings() {
     final keys = Constant.allLiveRoomQuickAccess.keys.toList();
-    var sort = LocalStorageService.instance
-        .getValue(
-          LocalStorageService.kLiveRoomQuickAccessSort,
-          keys.join(","),
-        )
-        .split(",")
-        .where((item) => item.trim().isNotEmpty)
-        .toList();
-    sort.removeWhere((item) => !keys.contains(item));
-    for (final key in keys) {
-      if (!sort.contains(key)) {
-        sort.add(key);
-      }
-    }
-    liveRoomQuickAccessSort.value = sort;
+    liveRoomQuickAccessSort.value = _readSort(
+      LocalStorageService.kLiveRoomQuickAccessSortV2,
+      LocalStorageService.kLiveRoomQuickAccessSort,
+      keys,
+      Constant.legacyLiveRoomQuickAccessKeys,
+    );
 
     final enabledRaw = LocalStorageService.instance.getValue(
       LocalStorageService.kLiveRoomQuickAccessEnabled,
@@ -636,6 +777,38 @@ class AppSettingsController extends GetxController {
     hardwareDecode.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kHardwareDecode, e);
+  }
+
+  var videoRenderingAcceleration = true.obs;
+  void setVideoRenderingAcceleration(bool value) {
+    videoRenderingAcceleration.value = value;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kVideoRenderingAcceleration, value);
+  }
+
+  // 屏幕安全区补偿仅保存在本机，单位为逻辑像素。
+  var mobileTopExtraInset = 0.obs;
+  var mobileBottomExtraInset = 0.obs;
+
+  int _normalizeMobileExtraInset(dynamic value) {
+    final parsed = value is num && value.isFinite
+        ? value.toInt()
+        : int.tryParse(value.toString()) ?? 0;
+    return parsed.clamp(0, mobileExtraInsetMax).toInt();
+  }
+
+  void setMobileTopExtraInset(int value) {
+    final normalized = _normalizeMobileExtraInset(value);
+    mobileTopExtraInset.value = normalized;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kMobileTopExtraInset, normalized);
+  }
+
+  void setMobileBottomExtraInset(int value) {
+    final normalized = _normalizeMobileExtraInset(value);
+    mobileBottomExtraInset.value = normalized;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kMobileBottomExtraInset, normalized);
   }
 
   var iosOriginalQualityPowerSaving = true.obs;
@@ -922,6 +1095,32 @@ class AppSettingsController extends GetxController {
         .setValue(LocalStorageService.kDanmuStrokeWidth, e);
   }
 
+  var danmuStrokeEnable = true.obs;
+  void setDanmuStrokeEnable(bool e) {
+    danmuStrokeEnable.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kDanmuStrokeEnable, e);
+  }
+
+  /// 弹幕渲染帧率上限：0=跟随屏幕刷新率，60=60fps
+  var danmuMaxFps = 0.obs;
+  void setDanmuMaxFps(int e) {
+    danmuMaxFps.value = e;
+    LocalStorageService.instance.setValue(LocalStorageService.kDanmuMaxFps, e);
+  }
+
+  /// 省电模式下强制关闭描边，降低每帧 drawParagraph 数量
+  bool get effectiveDanmuStroke =>
+      danmuStrokeEnable.value && !powerSaveMode.value;
+
+  /// 省电模式下强制 60fps；0 表示跟随屏幕
+  int? get effectiveDanmuMaxFps {
+    if (powerSaveMode.value) {
+      return 60;
+    }
+    return danmuMaxFps.value <= 0 ? null : danmuMaxFps.value;
+  }
+
   var danmuFontWeight = 4.obs;
   void setDanmuFontWeight(int e) {
     danmuFontWeight.value = e;
@@ -1015,6 +1214,15 @@ class AppSettingsController extends GetxController {
     playerCompatMode.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kPlayerCompatMode, e);
+  }
+
+  /// 省电模式：降低 mpv 缩放档位、弹幕帧率强制 60fps、关闭弹幕描边、
+  /// 放宽安卓播放看门狗、限制多开数量；进入下一个直播间后生效
+  var powerSaveMode = false.obs;
+  void setPowerSaveMode(bool e) {
+    powerSaveMode.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPowerSaveMode, e);
   }
 
   var playerBufferSize = 32.obs;
@@ -1150,6 +1358,15 @@ class AppSettingsController extends GetxController {
         .setValue(LocalStorageService.kEnablePipDanmu, e);
   }
 
+  // iOS 小窗（画中画）：后台保持画面（默认开，重连管线保证后台持续
+  // 出帧；关闭为即显省电路线，秒开但后台画面冻结、音频正常）
+  var pipKeepBackgroundVideo = true.obs;
+  void setPipKeepBackgroundVideo(bool e) {
+    pipKeepBackgroundVideo.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPipKeepBackgroundVideo, e);
+  }
+
   var pipDanmuScale = 0.75.obs;
   void setPipDanmuScale(double e) {
     pipDanmuScale.value = e;
@@ -1163,6 +1380,36 @@ class AppSettingsController extends GetxController {
     superChatScrollInFullscreen.value = e;
     LocalStorageService.instance
         .setValue(LocalStorageService.kSuperChatScrollInFullscreen, e);
+  }
+
+  // 全屏四角时钟：0左上 1右上 2左下 3右下
+  static const int kPlayerClockPositionTopLeft = 0;
+  static const int kPlayerClockPositionTopRight = 1;
+  static const int kPlayerClockPositionBottomLeft = 2;
+  static const int kPlayerClockPositionBottomRight = 3;
+
+  var playerClockEnable = false.obs;
+  void setPlayerClockEnable(bool e) {
+    playerClockEnable.value = e;
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPlayerClockEnable, e);
+  }
+
+  var playerClockPosition = kPlayerClockPositionTopRight.obs;
+  void setPlayerClockPosition(int e) {
+    playerClockPosition.value = _normalizePlayerClockPosition(e);
+    LocalStorageService.instance
+        .setValue(LocalStorageService.kPlayerClockPosition, e);
+  }
+
+  static int _normalizePlayerClockPosition(int e) {
+    const valid = [
+      kPlayerClockPositionTopLeft,
+      kPlayerClockPositionTopRight,
+      kPlayerClockPositionBottomLeft,
+      kPlayerClockPositionBottomRight,
+    ];
+    return valid.contains(e) ? e : kPlayerClockPositionTopRight;
   }
 
   var danmuShieldEnable = true.obs;
@@ -1424,6 +1671,12 @@ class AppSettingsController extends GetxController {
 
   void reloadFromStorage() {
     _loadFromStorage();
+    if (Get.isRegistered<CustomCategoryService>()) {
+      CustomCategoryService.instance.reloadFromStorage();
+    }
+    // 导入配置/重置后让底栏与平台标签立即跟随新配置
+    EventBus.instance.emit(EventBus.kUpdateHomeTabs, 0);
+    EventBus.instance.emit(EventBus.kUpdateSiteTabs, 0);
   }
 
   void importShieldValue(String rawValue) {
@@ -1987,20 +2240,88 @@ class AppSettingsController extends GetxController {
 
   RxList<String> siteSort = RxList<String>();
   void setSiteSort(List<String> e) {
-    siteSort.value = e;
+    final value = normalizeSortKeys(e, Sites.allSites.keys.toList());
+    siteSort.value = value;
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kSiteSortV2,
+      value.join(","),
+    );
+    // 旧版本只认识内置平台，读旧键时不能出现未知平台
     LocalStorageService.instance.setValue(
       LocalStorageService.kSiteSort,
-      siteSort.join(","),
+      projectLegacyKeys(value, Sites.legacySiteIds).join(","),
     );
+    EventBus.instance.emit(EventBus.kUpdateSiteTabs, 0);
+    EventBus.instance.emit(Constant.kUpdateFollow, 0);
   }
 
   RxList<String> homeSort = RxList<String>();
   void setHomeSort(List<String> e) {
-    homeSort.value = e;
+    final value = normalizeSortKeys(
+      e,
+      Constant.allHomePages.keys.toList(),
+    );
+    homeSort.value = value;
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kHomeSortV2,
+      value.join(","),
+    );
+    // 旧版本只认识四个内置入口，读旧键时不能出现 IPTV 等新入口
     LocalStorageService.instance.setValue(
       LocalStorageService.kHomeSort,
-      homeSort.join(","),
+      projectLegacyKeys(value, Constant.legacyHomeSortKeys).join(","),
     );
+    EventBus.instance.emit(EventBus.kUpdateHomeTabs, 0);
+  }
+
+  /// 底栏被隐藏的入口 key；“我的”不可隐藏
+  RxSet<String> homeHidden = <String>{}.obs;
+
+  /// 分类页被隐藏的平台 key
+  RxSet<String> siteHidden = <String>{}.obs;
+
+  bool isHomeVisible(String key) => !homeHidden.contains(key);
+
+  bool isSiteVisible(String key) => !siteHidden.contains(key);
+
+  void setHomeVisible(String key, bool visible) {
+    if (!Constant.allHomePages.containsKey(key) || key == Constant.kHomeMine) {
+      return;
+    }
+    if (visible) {
+      homeHidden.remove(key);
+    } else {
+      homeHidden.add(key);
+    }
+    homeHidden.refresh();
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kHomeHidden,
+      homeHidden.join(","),
+    );
+    EventBus.instance.emit(EventBus.kUpdateHomeTabs, 0);
+  }
+
+  /// 设置平台可见性；返回 false 表示被“至少保留一个平台”守卫拦截
+  bool setSiteVisible(String key, bool visible) {
+    if (!Sites.allSites.containsKey(key)) {
+      return false;
+    }
+    if (visible) {
+      siteHidden.remove(key);
+    } else {
+      // 至少保留一个平台可见，否则分类页无标签可用
+      if (siteHidden.length >= Sites.allSites.length - 1) {
+        return false;
+      }
+      siteHidden.add(key);
+    }
+    siteHidden.refresh();
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kSiteHidden,
+      siteHidden.join(","),
+    );
+    EventBus.instance.emit(EventBus.kUpdateSiteTabs, 0);
+    return true;
   }
 
   RxList<String> liveRoomTabSort = RxList<String>();
@@ -2024,16 +2345,19 @@ class AppSettingsController extends GetxController {
 
   void setLiveRoomQuickAccessSort(List<String> e) {
     final keys = Constant.allLiveRoomQuickAccess.keys.toList();
-    final value = e.where((item) => keys.contains(item)).toList();
-    for (final key in keys) {
-      if (!value.contains(key)) {
-        value.add(key);
-      }
-    }
+    final value = normalizeSortKeys(e, keys);
     liveRoomQuickAccessSort.value = value;
     LocalStorageService.instance.setValue(
+      LocalStorageService.kLiveRoomQuickAccessSortV2,
+      value.join(","),
+    );
+    // 旧版本只认识四个内置快捷入口
+    LocalStorageService.instance.setValue(
       LocalStorageService.kLiveRoomQuickAccessSort,
-      liveRoomQuickAccessSort.join(","),
+      projectLegacyKeys(
+        value,
+        Constant.legacyLiveRoomQuickAccessKeys,
+      ).join(","),
     );
   }
 
@@ -2178,6 +2502,7 @@ class AppSettingsController extends GetxController {
   var followOnlyLive = false.obs;
   var followRefreshOnEnter = false.obs;
   var followShowLiveCover = false.obs;
+  var followTagPanelExpanded = false.obs;
 
   String _normalizeFollowDisplayStyle(String value) {
     if (followDisplayStyleOptions.contains(value)) {
@@ -2231,6 +2556,14 @@ class AppSettingsController extends GetxController {
     followShowLiveCover.value = value;
     LocalStorageService.instance.setValue(
       LocalStorageService.kFollowShowLiveCover,
+      value,
+    );
+  }
+
+  void setFollowTagPanelExpanded(bool value) {
+    followTagPanelExpanded.value = value;
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kFollowTagPanelExpanded,
       value,
     );
   }
@@ -2327,6 +2660,16 @@ class AppSettingsController extends GetxController {
     playerVolume.value = value;
     LocalStorageService.instance.setValue(
       LocalStorageService.kPlayerVolume,
+      value,
+    );
+  }
+
+  /// 音量增强开关：开启后音量上限扩展至 300%，>100 为播放器软件增益（讨论 #161）。
+  Rx<bool> volumeBoostEnable = false.obs;
+  void setVolumeBoostEnable(bool value) {
+    volumeBoostEnable.value = value;
+    LocalStorageService.instance.setValue(
+      LocalStorageService.kVolumeBoostEnable,
       value,
     );
   }
@@ -2640,7 +2983,7 @@ class AppSettingsController extends GetxController {
   static const windowsGpuPreferenceOptions = <String, String>{
     "auto": "自动（由系统选择）",
     "low_power": "省电/核显",
-    "high_performance": "高性能/NVIDIA 独显",
+    "high_performance": "高性能 GPU（独显优先）",
   };
 
   var windowsGpuPreference = "auto".obs;

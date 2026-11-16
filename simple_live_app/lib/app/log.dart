@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:ffi' show Abi;
+import 'dart:convert' show utf8;
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -8,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'build_tag.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class Log {
@@ -72,7 +75,6 @@ class Log {
     addDebugLog(message, Colors.blue);
     logger.i("${DateTime.now().toString()}\n$message");
     if (writeFile) {
-      logFileWriter?.write("[INFO] $_currentTime：$message");
       writeLog(message, Level.info);
     }
   }
@@ -123,7 +125,7 @@ class LogFileWriter {
       await logDir.create();
     }
     var logFile = File("${logDir.path}/$fileName");
-    fileWriter = logFile.openWrite(mode: FileMode.append);
+    fileWriter = logFile.openWrite(mode: FileMode.append, encoding: utf8);
     writeSystemInfo();
   }
 
@@ -153,10 +155,11 @@ class LogFileWriter {
     write("System Info:");
     write("Current Time: ${DateTime.now()}");
     write("Platform: ${Platform.operatingSystem}");
+    write("Process ABI: ${Abi.current()}");
     write("Version: ${Platform.operatingSystemVersion}");
     write("Local: ${Platform.localeName}");
     write(
-        "App Version: ${Utils.packageInfo.version}+${Utils.packageInfo.buildNumber}");
+        "App Version: ${Utils.packageInfo.version}+${Utils.packageInfo.buildNumber}$kBuildTag");
     if (Platform.isAndroid) {
       write((await deviceInfo.androidInfo).data.toString());
     } else if (Platform.isIOS) {

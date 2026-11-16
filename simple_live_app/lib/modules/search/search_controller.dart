@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/app/site_tabs_mixin.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/search/search_list_controller.dart';
 
 class AppSearchController extends GetxController
-    with GetSingleTickerProviderStateMixin {
-  late TabController tabController;
+    with GetSingleTickerProviderStateMixin, SiteTabsMixin {
   int index = 0;
 
   var searchMode = 0.obs;
@@ -17,26 +17,28 @@ class AppSearchController extends GetxController
   AppSearchController() {
     final initialIndex = _resolveInitialIndex();
     index = initialIndex;
-    tabController = TabController(
-      length: Sites.supportSites.length,
-      vsync: this,
-      initialIndex: initialIndex,
-    );
-    AppSettingsController.instance.setLastSearchSiteId(Sites.supportSites[index].id);
+    initSiteTabs(initialIndex: initialIndex);
+    if (Sites.visibleSites.isNotEmpty) {
+      AppSettingsController.instance.setLastSearchSiteId(
+        Sites.visibleSites[index].id,
+      );
+    }
+    _bindTabListener();
+  }
+
+  void _bindTabListener() {
     tabController.animation?.addListener(() {
-      var currentIndex = (tabController.animation?.value ?? 0).round();
+      final currentIndex = (tabController.animation?.value ?? 0).round();
       if (index == currentIndex) {
         return;
       }
-
-      index = currentIndex;
-      AppSettingsController.instance.setLastSearchSiteId(Sites.supportSites[index].id);
-      // if (Sites.supportSites[index].id == Constant.kDouyin) {
-      //   return;
-      // }
-
-      var controller =
-          Get.find<SearchListController>(tag: Sites.supportSites[index].id);
+      final sites = Sites.visibleSites;
+      if (sites.isEmpty) {
+        return;
+      }
+      index = currentIndex.clamp(0, sites.length - 1);
+      AppSettingsController.instance.setLastSearchSiteId(sites[index].id);
+      final controller = Get.find<SearchListController>(tag: sites[index].id);
 
       if (controller.list.isEmpty &&
           !controller.pageEmpty.value &&
@@ -44,6 +46,29 @@ class AppSearchController extends GetxController
         controller.refreshData();
       }
     });
+  }
+
+  @override
+  void registerSiteListController(Site site) {
+    if (!Get.isRegistered<SearchListController>(tag: site.id)) {
+      Get.put(SearchListController(site), tag: site.id);
+    }
+  }
+
+  @override
+  void unregisterSiteListController(Site site) {
+    if (Get.isRegistered<SearchListController>(tag: site.id)) {
+      Get.delete<SearchListController>(tag: site.id);
+    }
+  }
+
+  @override
+  void onSiteTabsRebuilt(int initialIndex) {
+    index = initialIndex;
+    _bindTabListener();
+    AppSettingsController.instance.setLastSearchSiteId(
+      Sites.visibleSites[initialIndex].id,
+    );
   }
 
   StreamSubscription<dynamic>? streamSubscription;
@@ -60,13 +85,13 @@ class AppSearchController extends GetxController
     }
     siteId ??= AppSettingsController.instance.lastSearchSiteId.value;
     final resolvedIndex =
-        Sites.supportSites.indexWhere((site) => site.id == siteId);
+        Sites.visibleSites.indexWhere((site) => site.id == siteId);
     return resolvedIndex < 0 ? 0 : resolvedIndex;
   }
 
   @override
   void onInit() {
-    for (var site in Sites.supportSites) {
+    for (var site in Sites.visibleSites) {
       // if (site.id == Constant.kDouyin) {
       //   Get.put(DouyinSearchController(site));
       // } else {
@@ -76,6 +101,7 @@ class AppSearchController extends GetxController
       );
       //}
     }
+    listenSiteTabsChanged();
 
     super.onInit();
   }
@@ -84,7 +110,7 @@ class AppSearchController extends GetxController
     if (searchController.text.isEmpty) {
       return;
     }
-    for (var site in Sites.supportSites) {
+    for (var site in Sites.visibleSites) {
       // if (site.id == Constant.kDouyin) {
       //   var controller = Get.find<DouyinSearchController>();
       //   controller.keyword = searchController.text;
@@ -99,7 +125,7 @@ class AppSearchController extends GetxController
     }
     // if (Sites.supportSites[index].id != Constant.kDouyin) {
     var controller =
-        Get.find<SearchListController>(tag: Sites.supportSites[index].id);
+        Get.find<SearchListController>(tag: Sites.visibleSites[index].id);
     controller.refreshData();
     //}
   }

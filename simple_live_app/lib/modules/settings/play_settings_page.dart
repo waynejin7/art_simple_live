@@ -42,16 +42,40 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
               children: [
                 Obx(
                   () => SettingsSwitch(
+                    title: "省电模式",
+                    subtitle: "降低发热：简化视频缩放算法、弹幕帧率限 60、关闭弹幕描边、"
+                        "放宽播放检测频率、限制多开数量；画质略降，进入下一个直播间后生效",
+                    value: controller.powerSaveMode.value,
+                    onChanged: controller.setPowerSaveMode,
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
                     title: Platform.isIOS ? "硬件加速" : "硬件解码",
                     value: controller.hardwareDecode.value,
                     subtitle: Platform.isIOS
                         ? "建议保持开启；关闭后更耗电，仅在排查黑屏时临时使用"
-                        : "播放失败可尝试关闭此选项",
+                        : Platform.isWindows
+                            ? "关闭后使用软件解码，优先于高级解码参数；重新进入直播间后生效"
+                            : "播放失败可尝试关闭此选项",
                     onChanged: (e) {
                       controller.setHardwareDecode(e);
                     },
                   ),
                 ),
+                if (Platform.isWindows) ...[
+                  AppStyle.divider,
+                  Obx(
+                    () => SettingsSwitch(
+                      title: "视频渲染加速",
+                      subtitle: "控制视频画面的 GPU 渲染，与硬件解码独立；"
+                          "关闭后软件输出最高 1080p，CPU 占用可能上升；重新进入直播间后生效",
+                      value: controller.videoRenderingAcceleration.value,
+                      onChanged: controller.setVideoRenderingAcceleration,
+                    ),
+                  ),
+                ],
                 if (Platform.isIOS) AppStyle.divider,
                 if (Platform.isIOS)
                   Obx(
@@ -113,8 +137,7 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                   Obx(
                     () => SettingsMenu<String>(
                       title: "全屏方向",
-                      subtitle:
-                          "平板锁定竖屏时选“强制横屏”；Android 16 大屏设备会忽略应用的强制方向请求",
+                      subtitle: "平板锁定竖屏时选“强制横屏”；Android 16 大屏设备会忽略应用的强制方向请求",
                       value: controller.fullscreenOrientation.value,
                       valueMap: const {
                         "smart": "智能（推荐）",
@@ -137,14 +160,48 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                     },
                   ),
                 ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "直播间",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Obx(
+                  () => SettingsSwitch(
+                    title: "进入直播间自动全屏",
+                    value: controller.autoFullScreen.value,
+                    onChanged: (e) {
+                      controller.setAutoFullScreen(e);
+                    },
+                  ),
+                ),
                 AppStyle.divider,
                 Obx(
                   () => SettingsSwitch(
-                    title: "滑动调节音量/亮度",
-                    subtitle: "播放页左右两侧上下滑动调节亮度和音量",
-                    value: controller.playerGestureControlEnable.value,
+                    title: "关播后自动换下一个直播间",
+                    subtitle: "当前房间确认已下播后，自动切到关注列表里下一个正在直播的房间",
+                    value: controller.autoSwitchNextOnLiveEnd.value,
                     onChanged: (e) {
-                      controller.setPlayerGestureControlEnable(e);
+                      controller.setAutoSwitchNextOnLiveEnd(e);
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "播放失败后自动换下一个直播间",
+                    subtitle: "当前房间重试和线路切换都失败后，自动切到下一个正在直播的房间",
+                    value: controller.autoSwitchNextOnPlaybackFailure.value,
+                    onChanged: (e) {
+                      controller.setAutoSwitchNextOnPlaybackFailure(e);
                     },
                   ),
                 ),
@@ -164,8 +221,7 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                   Obx(
                     () => SettingsSwitch(
                       title: "与其他应用同时播放",
-                      subtitle:
-                          "开启后不再申请音频焦点，可能与其它应用同时出声；来电、蓝牙/车机等场景可能异常",
+                      subtitle: "开启后不再申请音频焦点，可能与其它应用同时出声；来电、蓝牙/车机等场景可能异常",
                       value: controller.allowConcurrentAudio.value,
                       onChanged: (e) {
                         controller.setAllowConcurrentAudio(e);
@@ -183,6 +239,349 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
                       RoutePath.kSettingsBackgroundKeepalive,
                     ),
                   ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "滑动调节音量/亮度",
+                    subtitle: "播放页左右两侧上下滑动调节亮度和音量",
+                    value: controller.playerGestureControlEnable.value,
+                    onChanged: (e) {
+                      controller.setPlayerGestureControlEnable(e);
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => Visibility(
+                    visible: Platform.isAndroid,
+                    child: SettingsSwitch(
+                      title: "进入小窗隐藏弹幕",
+                      value: controller.pipHideDanmu.value,
+                      onChanged: (e) {
+                        controller.setPIPHideDanmu(e);
+                      },
+                    ),
+                  ),
+                ),
+                if (Platform.isAndroid) AppStyle.divider,
+                Obx(
+                  () => Visibility(
+                    visible: Platform.isAndroid,
+                    child: SettingsSwitch(
+                      title: "退出时自动小窗",
+                      subtitle: "按 Home 键或系统手势退到后台时进入小窗；应用内返回仍回到主页",
+                      value: controller.autoPipOnExit.value,
+                      onChanged: (e) {
+                        controller.setAutoPipOnExit(e);
+                      },
+                    ),
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "播放器中显示SC",
+                    value: controller.playershowSuperChat.value,
+                    onChanged: (e) {
+                      controller.setPlayerShowSuperChat(e);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 音量增强
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "音量",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              children: [
+                Obx(
+                  () => SettingsSwitch(
+                    title: "音量增强（0-300%）",
+                    subtitle:
+                        "开启后音量上限扩展至 300%，超过 100% 为播放器软件增益，部分直播间音量偏小时有用；音源响度大时可能破音",
+                    value: controller.volumeBoostEnable.value,
+                    onChanged: controller.setVolumeBoostEnable,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "弹幕显示优化",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 小窗弹幕设置（桌面端）
+                if (Platform.isWindows ||
+                    Platform.isLinux ||
+                    Platform.isMacOS) ...[
+                  Padding(
+                    padding: AppStyle.edgeInsetsA12,
+                    child: Text(
+                      "小窗弹幕",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Get.theme.primaryColor,
+                      ),
+                    ),
+                  ),
+                  Obx(
+                    () => SettingsNumber(
+                      title: "小窗字体缩放",
+                      subtitle: "相对于正常播放时的弹幕大小",
+                      value:
+                          (controller.smallWindowDanmuScale.value * 10).round(),
+                      min: 5,
+                      max: 10,
+                      step: 1,
+                      unit: "",
+                      displayValue:
+                          "${(controller.smallWindowDanmuScale.value * 10).round() / 10}x",
+                      onChanged: (v) =>
+                          controller.setSmallWindowDanmuScale(v / 10),
+                    ),
+                  ),
+                  AppStyle.divider,
+                  Obx(
+                    () => SettingsNumber(
+                      title: "小窗最大行数",
+                      subtitle: "限制小窗时的弹幕行数，避免遮挡画面",
+                      value: controller.smallWindowDanmuMaxLines.value,
+                      min: 3,
+                      max: 10,
+                      step: 1,
+                      unit: "行",
+                      onChanged: controller.setSmallWindowDanmuMaxLines,
+                    ),
+                  ),
+                  AppStyle.divider,
+                  Obx(
+                    () => SettingsSwitch(
+                      title: "小窗自动透明",
+                      subtitle: "小窗时自动降低弹幕透明度（70%）",
+                      value: controller.smallWindowDanmuAutoTransparent.value,
+                      onChanged: controller.setSmallWindowDanmuAutoTransparent,
+                    ),
+                  ),
+                ],
+                // PIP弹幕设置（Android）
+                if (Platform.isAndroid) ...[
+                  if (Platform.isWindows ||
+                      Platform.isLinux ||
+                      Platform.isMacOS)
+                    AppStyle.divider,
+                  Padding(
+                    padding: AppStyle.edgeInsetsA12,
+                    child: Text(
+                      "PIP 弹幕（画中画）",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Get.theme.primaryColor,
+                      ),
+                    ),
+                  ),
+                  Obx(
+                    () => SettingsSwitch(
+                      title: "PIP 显示弹幕",
+                      subtitle: "画中画模式下显示弹幕（仅滚动弹幕，限制区域）",
+                      value: controller.enablePipDanmu.value,
+                      onChanged: controller.setEnablePipDanmu,
+                    ),
+                  ),
+                  AppStyle.divider,
+                  Obx(
+                    () => SettingsNumber(
+                      title: "PIP 字体缩放",
+                      subtitle: "相对于正常播放时的弹幕大小",
+                      value: (controller.pipDanmuScale.value * 20).round(),
+                      min: 10,
+                      max: 20,
+                      step: 1,
+                      unit: "",
+                      displayValue:
+                          "${(controller.pipDanmuScale.value * 20).round() / 20}x",
+                      onChanged: (v) => controller.setPipDanmuScale(v / 20),
+                    ),
+                  ),
+                ],
+                // iOS 小窗（画中画）
+                if (Platform.isIOS) ...[
+                  AppStyle.divider,
+                  Padding(
+                    padding: AppStyle.edgeInsetsA12,
+                    child: Text(
+                      "iOS 小窗（画中画）",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Get.theme.primaryColor,
+                      ),
+                    ),
+                  ),
+                  Obx(
+                    () => SettingsSwitch(
+                      title: "后台保持画面",
+                      subtitle:
+                          "切后台后小窗持续显示直播画面（软解码渲染，略增耗电）；关闭后进小窗更快更省电，后台画面停住、声音正常",
+                      value: controller.pipKeepBackgroundVideo.value,
+                      onChanged: controller.setPipKeepBackgroundVideo,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // SuperChat 全屏滚动
+          SettingsCard(
+            child: Column(
+              children: [
+                Obx(
+                  () => SettingsSwitch(
+                    title: "SC 全屏滚动",
+                    subtitle: "SuperChat 在全屏时作为弹幕滚动显示，格式：【头条】用户名：内容",
+                    value: controller.superChatScrollInFullscreen.value,
+                    onChanged: controller.setSuperChatScrollInFullscreen,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 全屏四角时钟
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "四角时钟",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              children: [
+                Obx(
+                  () => SettingsSwitch(
+                    title: "全屏四角时钟",
+                    subtitle: "在全屏直播画面角落常驻显示当前时间，不随控制栏隐藏",
+                    value: controller.playerClockEnable.value,
+                    onChanged: controller.setPlayerClockEnable,
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsMenu<int>(
+                    title: "时钟位置",
+                    value: controller.playerClockPosition.value,
+                    valueMap: const {
+                      0: "左上角",
+                      1: "右上角",
+                      2: "左下角",
+                      3: "右下角",
+                    },
+                    onChanged: controller.setPlayerClockPosition,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "清晰度",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              children: [
+                Obx(
+                  () => SettingsMenu<int>(
+                    title: "默认清晰度",
+                    value: controller.qualityLevel.value,
+                    valueMap: const {
+                      0: "最低",
+                      1: "中等",
+                      2: "最高",
+                      3: "记住上次",
+                    },
+                    onChanged: (e) {
+                      controller.setQualityLevel(e);
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsMenu<int>(
+                    title: "数据网络清晰度",
+                    value: controller.qualityLevelCellular.value,
+                    valueMap: const {
+                      0: "最低",
+                      1: "中等",
+                      2: "最高",
+                      3: "记住上次",
+                    },
+                    onChanged: (e) {
+                      controller.setQualityLevelCellular(e);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
+            child: Text(
+              "聊天区",
+              style: Get.textTheme.titleSmall,
+            ),
+          ),
+          SettingsCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Obx(
+                  () => SettingsNumber(
+                    title: "文字大小",
+                    value: controller.chatTextSize.value.toInt(),
+                    min: 8,
+                    max: 36,
+                    onChanged: (e) {
+                      controller.setChatTextSize(e.toDouble());
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsNumber(
+                    title: "上下间隔",
+                    value: controller.chatTextGap.value.toInt(),
+                    min: 0,
+                    max: 12,
+                    onChanged: (e) {
+                      controller.setChatTextGap(e.toDouble());
+                    },
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
+                    title: "气泡样式",
+                    value: controller.chatBubbleStyle.value,
+                    onChanged: (e) {
+                      controller.setChatBubbleStyle(e);
+                    },
+                  ),
+                ),
               ],
             ),
           ),
@@ -365,292 +764,6 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
               ),
             ),
           ],
-          Padding(
-            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
-            child: Text(
-              "直播间",
-              style: Get.textTheme.titleSmall,
-            ),
-          ),
-          SettingsCard(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Obx(
-                  () => SettingsSwitch(
-                    title: "进入直播间自动全屏",
-                    value: controller.autoFullScreen.value,
-                    onChanged: (e) {
-                      controller.setAutoFullScreen(e);
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsSwitch(
-                    title: "关播后自动换下一个直播间",
-                    subtitle: "当前房间确认已下播后，自动切到关注列表里下一个正在直播的房间",
-                    value: controller.autoSwitchNextOnLiveEnd.value,
-                    onChanged: (e) {
-                      controller.setAutoSwitchNextOnLiveEnd(e);
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsSwitch(
-                    title: "播放失败后自动换下一个直播间",
-                    subtitle: "当前房间重试和线路切换都失败后，自动切到下一个正在直播的房间",
-                    value: controller.autoSwitchNextOnPlaybackFailure.value,
-                    onChanged: (e) {
-                      controller.setAutoSwitchNextOnPlaybackFailure(e);
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => Visibility(
-                    visible: Platform.isAndroid,
-                    child: SettingsSwitch(
-                      title: "进入小窗隐藏弹幕",
-                      value: controller.pipHideDanmu.value,
-                      onChanged: (e) {
-                        controller.setPIPHideDanmu(e);
-                      },
-                    ),
-                  ),
-                ),
-                if (Platform.isAndroid) AppStyle.divider,
-                Obx(
-                  () => Visibility(
-                    visible: Platform.isAndroid,
-                    child: SettingsSwitch(
-                      title: "退出时自动小窗",
-                      subtitle: "按 Home 键或系统手势退到后台时进入小窗；应用内返回仍回到主页",
-                      value: controller.autoPipOnExit.value,
-                      onChanged: (e) {
-                        controller.setAutoPipOnExit(e);
-                      },
-                    ),
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsSwitch(
-                    title: "播放器中显示SC",
-                    value: controller.playershowSuperChat.value,
-                    onChanged: (e) {
-                      controller.setPlayerShowSuperChat(e);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
-            child: Text(
-              "弹幕显示优化",
-              style: Get.textTheme.titleSmall,
-            ),
-          ),
-          SettingsCard(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 小窗弹幕设置（桌面端）
-                if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
-                  Padding(
-                    padding: AppStyle.edgeInsetsA12,
-                    child: Text(
-                      "小窗弹幕",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Get.theme.primaryColor,
-                      ),
-                    ),
-                  ),
-                  Obx(
-                    () => SettingsNumber(
-                      title: "小窗字体缩放",
-                      subtitle: "相对于正常播放时的弹幕大小",
-                      value: (controller.smallWindowDanmuScale.value * 10).round(),
-                      min: 5,
-                      max: 10,
-                      step: 1,
-                      unit: "",
-                      displayValue: "${(controller.smallWindowDanmuScale.value * 10).round() / 10}x",
-                      onChanged: (v) => controller.setSmallWindowDanmuScale(v / 10),
-                    ),
-                  ),
-                  AppStyle.divider,
-                  Obx(
-                    () => SettingsNumber(
-                      title: "小窗最大行数",
-                      subtitle: "限制小窗时的弹幕行数，避免遮挡画面",
-                      value: controller.smallWindowDanmuMaxLines.value,
-                      min: 3,
-                      max: 10,
-                      step: 1,
-                      unit: "行",
-                      onChanged: controller.setSmallWindowDanmuMaxLines,
-                    ),
-                  ),
-                  AppStyle.divider,
-                  Obx(
-                    () => SettingsSwitch(
-                      title: "小窗自动透明",
-                      subtitle: "小窗时自动降低弹幕透明度（70%）",
-                      value: controller.smallWindowDanmuAutoTransparent.value,
-                      onChanged: controller.setSmallWindowDanmuAutoTransparent,
-                    ),
-                  ),
-                ],
-                // PIP弹幕设置（Android）
-                if (Platform.isAndroid) ...[
-                  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) AppStyle.divider,
-                  Padding(
-                    padding: AppStyle.edgeInsetsA12,
-                    child: Text(
-                      "PIP 弹幕（画中画）",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Get.theme.primaryColor,
-                      ),
-                    ),
-                  ),
-                  Obx(
-                    () => SettingsSwitch(
-                      title: "PIP 显示弹幕",
-                      subtitle: "画中画模式下显示弹幕（仅滚动弹幕，限制区域）",
-                      value: controller.enablePipDanmu.value,
-                      onChanged: controller.setEnablePipDanmu,
-                    ),
-                  ),
-                  AppStyle.divider,
-                  Obx(
-                    () => SettingsNumber(
-                      title: "PIP 字体缩放",
-                      subtitle: "相对于正常播放时的弹幕大小",
-                      value: (controller.pipDanmuScale.value * 20).round(),
-                      min: 10,
-                      max: 20,
-                      step: 1,
-                      unit: "",
-                      displayValue: "${(controller.pipDanmuScale.value * 20).round() / 20}x",
-                      onChanged: (v) => controller.setPipDanmuScale(v / 20),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          // SuperChat 全屏滚动
-          SettingsCard(
-            child: Column(
-              children: [
-                Obx(
-                  () => SettingsSwitch(
-                    title: "SC 全屏滚动",
-                    subtitle: "SuperChat 在全屏时作为弹幕滚动显示，格式：【头条】用户名：内容",
-                    value: controller.superChatScrollInFullscreen.value,
-                    onChanged: controller.setSuperChatScrollInFullscreen,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
-            child: Text(
-              "清晰度",
-              style: Get.textTheme.titleSmall,
-            ),
-          ),
-          SettingsCard(
-            child: Column(
-              children: [
-                Obx(
-                  () => SettingsMenu<int>(
-                    title: "默认清晰度",
-                    value: controller.qualityLevel.value,
-                    valueMap: const {
-                      0: "最低",
-                      1: "中等",
-                      2: "最高",
-                      3: "记住上次",
-                    },
-                    onChanged: (e) {
-                      controller.setQualityLevel(e);
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsMenu<int>(
-                    title: "数据网络清晰度",
-                    value: controller.qualityLevelCellular.value,
-                    valueMap: const {
-                      0: "最低",
-                      1: "中等",
-                      2: "最高",
-                      3: "记住上次",
-                    },
-                    onChanged: (e) {
-                      controller.setQualityLevelCellular(e);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: AppStyle.edgeInsetsA12.copyWith(top: 24),
-            child: Text(
-              "聊天区",
-              style: Get.textTheme.titleSmall,
-            ),
-          ),
-          SettingsCard(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Obx(
-                  () => SettingsNumber(
-                    title: "文字大小",
-                    value: controller.chatTextSize.value.toInt(),
-                    min: 8,
-                    max: 36,
-                    onChanged: (e) {
-                      controller.setChatTextSize(e.toDouble());
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsNumber(
-                    title: "上下间隔",
-                    value: controller.chatTextGap.value.toInt(),
-                    min: 0,
-                    max: 12,
-                    onChanged: (e) {
-                      controller.setChatTextGap(e.toDouble());
-                    },
-                  ),
-                ),
-                AppStyle.divider,
-                Obx(
-                  () => SettingsSwitch(
-                    title: "气泡样式",
-                    value: controller.chatBubbleStyle.value,
-                    onChanged: (e) {
-                      controller.setChatBubbleStyle(e);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

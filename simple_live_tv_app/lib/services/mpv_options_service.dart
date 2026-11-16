@@ -4,6 +4,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:simple_live_tv_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_tv_app/app/log.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
 class MpvOptionsService {
   static const Map<String, String> profileLabels = {
@@ -49,9 +50,18 @@ class MpvOptionsService {
   static Map<String, String> effectiveOptions() {
     final settings = AppSettingsController.instance;
     final profile = settings.mpvProfile.value;
-    return <String, String>{
+    final options = <String, String>{
       ...profiles[profile] ?? profiles["balanced"]!,
     };
+    if (Platform.isWindows) {
+      // 保留原档位的自动硬解；软件输出时由共享策略改用 copy-back。
+      options["hwdec"] = WindowsVideoAccelerationPolicy.resolve(
+        hardwareDecode: settings.hardwareDecode.value,
+        renderingAcceleration: settings.videoRenderingAcceleration.value,
+        requestedHwdec: options["hwdec"],
+      ).hwdec!;
+    }
+    return options;
   }
 
   static VideoControllerConfiguration videoControllerConfiguration() {
@@ -66,7 +76,9 @@ class MpvOptionsService {
     if (!Platform.isAndroid) {
       return VideoControllerConfiguration(
         hwdec: options["hwdec"],
-        enableHardwareAcceleration: settings.hardwareDecode.value,
+        enableHardwareAcceleration: Platform.isWindows
+            ? settings.videoRenderingAcceleration.value
+            : settings.hardwareDecode.value,
       );
     }
     return VideoControllerConfiguration(
@@ -78,11 +90,18 @@ class MpvOptionsService {
     );
   }
 
+  /// 音频默认参数：扩大 mpv softvol 范围以支持 >100% 的音量增益档
+  /// （media_kit 的 setVolume 直透 mpv volume 属性，上限由 volume-max 决定）。
+  static const Map<String, String> audioDefaultOptions = {
+    'volume-max': '300',
+  };
+
   static Future<void> applyToPlayer(Player player) async {
     if (player.platform is! NativePlayer) {
       return;
     }
-    final options = Map<String, String>.from(effectiveOptions())
+    final options = Map<String, String>.from(audioDefaultOptions)
+      ..addAll(effectiveOptions())
       ..remove("vo")
       ..remove("hwdec");
     for (final entry in options.entries) {

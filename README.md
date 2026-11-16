@@ -151,6 +151,27 @@ TV 下载建议：
 - 抖音直播
 - 快手直播
 
+## IPTV 公开直播源说明
+本项目 IPTV 功能所有直播源均来自公开开源项目，完整保留作者原始内容、公告频道、赞助提示，不做任何过滤或删除，尊重所有原作者的权益与劳动。
+
+### 源列表与作者信息
+| 源名称 | 作者 | 项目地址 | 开源协议 | 说明 |
+| --- | --- | --- | --- | --- |
+| DataShare海外源 | DataShare-duo | [DataShare-duo/IPTV-Source](https://github.com/DataShare-duo/IPTV-Source) | 项目开源 | 海外节点直连，CDN加速，适配境外网络，央视频道完整 |
+| suxuang全量源 | suxuang | [suxuang/myIPTV](https://github.com/suxuang/myIPTV) | 项目开源 | 全量多节点源，频道覆盖全面，每日自动更新 |
+| vbskycn 全量源 | vbskycn | [vbskycn/iptv](https://github.com/vbskycn/iptv) | 项目开源 | 427 个频道，覆盖完整央视、卫视与地方省份台，每 6 小时自动更新 |
+| peterh 镜像源 | peterhchina | [peterhchina.github.io/iptv/](https://peterhchina.github.io/iptv/) | 项目开源 | 全量源同步镜像，每日自动更新 |
+| 原范明明、HerbertHe、YanG源 | - | - | - | 公开地址已失效或连通性不达标，不再内置，感谢此前公益维护 |
+
+### 作者重要提示
+根据 vbskycn 源官方说明：
+> 不观看节目的时候建议退出软件，保持后台运行会让设备持续全速运行，浪费电力、占用网络带宽，同时消耗源服务器带宽，加速设备老化。如果服务器检测到设备异常浪费大量带宽，可能会自动封禁对应 IP 地址。
+
+### 分流与容灾逻辑
+- 首次启动会从前 3 个全量源中随机选择一个作为默认，避免所有用户集中访问同一服务器，自动分摊流量压力。
+- 每个源配置多个镜像地址，单地址 5 秒连接超时后自动切换，所有源全部无法访问才会报错，用户无需手动操作。
+- 所有源内的作者公告、赞助宣传频道均完整保留，不会被自动过滤。
+
 ## APP 支持平台
 
 - [x] Android

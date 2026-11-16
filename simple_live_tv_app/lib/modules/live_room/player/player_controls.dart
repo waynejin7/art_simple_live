@@ -23,12 +23,120 @@ Widget playerControls(VideoState videoState, LiveRoomController controller) {
   return buildControls(videoState, controller);
 }
 
+/// 全屏四角时钟：常驻显示当前时间，不随控制栏显隐消失（讨论 #160）
+Widget _buildCornerClock(LiveRoomController controller) {
+  final settings = AppSettingsController.instance;
+  return Obx(
+    () {
+      if (!settings.playerClockEnable.value) {
+        return const SizedBox.shrink();
+      }
+      Alignment alignment;
+      switch (settings.playerClockPosition.value) {
+        case AppSettingsController.kPlayerClockPositionTopLeft:
+          alignment = Alignment.topLeft;
+          break;
+        case AppSettingsController.kPlayerClockPositionBottomLeft:
+          alignment = Alignment.bottomLeft;
+          break;
+        case AppSettingsController.kPlayerClockPositionBottomRight:
+          alignment = Alignment.bottomRight;
+          break;
+        default:
+          alignment = Alignment.topRight;
+      }
+      // 复用 LiveRoomController 已有的每秒 datetime 定时器
+      return IgnorePointer(
+        child: Align(
+          alignment: alignment,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 32.w,
+              right: 32.w,
+              top: 24.w,
+              bottom: 24.w,
+            ),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.w),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(8.w),
+              ),
+              child: Text(
+                controller.datetime.value,
+                style: AppStyle.titleStyleWhite,
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// 音量 OSD：遥控器/设置面板调节音量时短暂显示（讨论 #161）
+Widget _buildVolumeOSD(LiveRoomController controller) {
+  return Obx(() {
+    if (!controller.showVolumeOSDState.value) {
+      return const SizedBox.shrink();
+    }
+    final volume = controller.volumeOSDValue.value;
+    final progress = (volume / 300).clamp(0.0, 1.0);
+    final boost = volume > 100;
+    return IgnorePointer(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: EdgeInsets.only(bottom: 140.w),
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 16.w),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(12.w),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "音量 ${volume.round()}%${boost ? "（增强）" : ""}",
+                  style: AppStyle.titleStyleWhite,
+                ),
+                SizedBox(height: 12.w),
+                Container(
+                  width: 320.w,
+                  height: 10.w,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(5.w),
+                  ),
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: progress,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: boost ? Colors.amber : Colors.white,
+                        borderRadius: BorderRadius.circular(5.w),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+}
+
 Widget buildControls(VideoState videoState, LiveRoomController controller) {
   return Stack(
     children: [
       Container(),
       buildDanmuView(videoState, controller),
       _buildLiveEventFlowOverlay(controller),
+      _buildCornerClock(controller),
+      _buildVolumeOSD(controller),
       // 点击播放器打开设置
       Positioned.fill(
         child: GestureDetector(onTap: () => showPlayerSettings(controller)),
@@ -110,10 +218,19 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
                   ),
                 ),
                 Obx(
-                  () => Text(
-                    controller.datetime.value,
-                    style: AppStyle.titleStyleWhite,
-                  ),
+                  () {
+                    final settings = AppSettingsController.instance;
+                    // 四角时钟已开启且位于右上角时，顶栏不再重复显示时间
+                    if (settings.playerClockEnable.value &&
+                        settings.playerClockPosition.value ==
+                            AppSettingsController.kPlayerClockPositionTopRight) {
+                      return const SizedBox.shrink();
+                    }
+                    return Text(
+                      controller.datetime.value,
+                      style: AppStyle.titleStyleWhite,
+                    );
+                  },
                 ),
               ],
             ),
@@ -306,6 +423,7 @@ Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
       emojiScale: 1.4,
       duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
       opacity: AppSettingsController.instance.danmuOpacity.value,
+      strokeWidth: AppSettingsController.instance.danmuStrokeWidth.value.w,
     ),
   );
   return Positioned.fill(
@@ -414,6 +532,9 @@ void showPlayerSettings(LiveRoomController controller) {
   var qualityFoucsNode = AppFocusNode();
   var lineFoucsNode = AppFocusNode();
   var scaleFoucsNode = AppFocusNode();
+  var clockFoucsNode = AppFocusNode();
+  var volumeFoucsNode = AppFocusNode();
+  var volumeBoostFoucsNode = AppFocusNode();
   var danmakuFoucsNode = AppFocusNode();
   var danmakuSizeFoucsNode = AppFocusNode();
   var danmakuSpeedFoucsNode = AppFocusNode();
@@ -585,6 +706,62 @@ void showPlayerSettings(LiveRoomController controller) {
                   onChanged: (e) {
                     AppSettingsController.instance.setScaleMode(e);
                     controller.updateScaleMode();
+                  },
+                ),
+              ),
+              AppStyle.vGap24,
+              Obx(
+                () => SettingsItemWidget(
+                  foucsNode: clockFoucsNode,
+                  title: "四角时钟",
+                  items: const {0: "关", 1: "开"},
+                  value: AppSettingsController.instance.playerClockEnable.value
+                      ? 1
+                      : 0,
+                  onChanged: (e) {
+                    AppSettingsController.instance.setPlayerClockEnable(e == 1);
+                  },
+                ),
+              ),
+              AppStyle.vGap24,
+              Obx(
+                () {
+                  // 步长 10，范围随"音量增强"开关：关 = 0-100，开 = 0-300；
+                  // value 取整到 key 对齐，避免遥控器 ±5 调出的中间值
+                  // 让左右切换时 indexOf 找不到
+                  final boost =
+                      AppSettingsController.instance.volumeBoostEnable.value;
+                  final maxVolume = boost ? 300 : 100;
+                  final current =
+                      AppSettingsController.instance.playerVolume.value;
+                  final snapped =
+                      ((current / 10).round() * 10).clamp(0, maxVolume);
+                  return SettingsItemWidget(
+                    foucsNode: volumeFoucsNode,
+                    title: "音量",
+                    items: {
+                      for (var v = 0; v <= maxVolume; v += 10)
+                        v: v > 100 ? "$v%（增强）" : "$v%",
+                    },
+                    value: snapped,
+                    onChanged: (e) {
+                      controller.adjustVolume((e as int) - current);
+                    },
+                  );
+                },
+              ),
+              AppStyle.vGap24,
+              Obx(
+                () => SettingsItemWidget(
+                  foucsNode: volumeBoostFoucsNode,
+                  title: "音量增强",
+                  items: const {0: "关", 1: "开"},
+                  value:
+                      AppSettingsController.instance.volumeBoostEnable.value
+                          ? 1
+                          : 0,
+                  onChanged: (e) {
+                    controller.setVolumeBoostEnabled(e == 1);
                   },
                 ),
               ),

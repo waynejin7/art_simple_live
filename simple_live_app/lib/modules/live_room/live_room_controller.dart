@@ -19,6 +19,7 @@ import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
+import 'package:simple_live_app/models/custom_category_item.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
@@ -30,11 +31,13 @@ import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/current_room_service.dart';
+import 'package:simple_live_app/services/custom_category_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/ios_audio_session_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/live_subtitle_service.dart';
 import 'package:simple_live_app/services/mpv_options_service.dart';
+import 'package:simple_live_app/services/player_resource_lifecycle.dart';
 import 'package:simple_live_app/widgets/filter_button.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
@@ -52,6 +55,67 @@ class LiveRoomController extends PlayerController
     with WidgetsBindingObserver, WindowListener {
   static const volumeSliderDialogTag = liveRoomVolumeSliderDialogTag;
   static const _appWindowChannel = MethodChannel('simple_live/app_window');
+  static final _androidPlayerRetirements = PlayerRetirementCoordinator();
+  final playerViewReady = (!Platform.isAndroid).obs;
+  Future<PlayerHandoffStatus>? _androidPlayerStartup;
+
+  @override
+  bool get deferPlayerBindings => Platform.isAndroid;
+
+  Future<PlayerHandoffStatus> _ensurePlayerReady() {
+    if (!Platform.isAndroid || playerViewReady.value) {
+      return Future.value(PlayerHandoffStatus.ready);
+    }
+    final active = _androidPlayerStartup;
+    if (active != null) return active;
+    final startup = _initializeAndroidPlayer();
+    _androidPlayerStartup = startup;
+    return startup.whenComplete(() {
+      if (identical(_androidPlayerStartup, startup)) {
+        _androidPlayerStartup = null;
+      }
+    });
+  }
+
+  Future<PlayerHandoffStatus> _initializeAndroidPlayer() async {
+    return _androidPlayerRetirements.initializeWhenReleased(
+      instanceId: playerInstanceId,
+      timeout: const Duration(seconds: 12),
+      cancelled: playerClosingSignal,
+      isCurrent: () => !_roomDisposed && !isPlayerClosing,
+      initialize: () {
+        initializePlayerBindings();
+        _bindPlayerPosition();
+        playerViewReady.value = true;
+      },
+    );
+  }
+
+  Future<void> _preparePlayerForLoad(int loadGeneration) async {
+    try {
+      final status = await _ensurePlayerReady();
+      if (!_isCurrentLoad(loadGeneration) ||
+          status == PlayerHandoffStatus.ready ||
+          status == PlayerHandoffStatus.cancelled) {
+        return;
+      }
+      errorMsg.value = status == PlayerHandoffStatus.releaseFailed
+          ? '上一直播间的播放器释放失败，请重启应用后重试'
+          : '上一直播间的播放器仍在关闭，请稍后刷新重试';
+    } catch (error, stackTrace) {
+      Log.e('安卓播放器创建失败：id=$playerInstanceId $error', stackTrace);
+      if (_isCurrentLoad(loadGeneration)) {
+        errorMsg.value = '播放器初始化失败，请刷新重试';
+      }
+    }
+  }
+
+  void _bindPlayerPosition() {
+    _positionSubscription ??= player.stream.position.listen((event) {
+      _lastKnownPlayerPosition = event;
+    });
+  }
+
   final Site pSite;
   final String pRoomId;
   final bool initialDesktopSidePanelCollapsed;
@@ -224,6 +288,7 @@ class LiveRoomController extends PlayerController
   int? _lastVideoOutputDropCount;
   int _videoOutputDropSamples = 0;
   bool _outputDropSamplePending = false;
+  DateTime? _lastVideoOutputDropSampleAt;
   bool _watchdogRefreshing = false;
   DateTime? _lastWatchdogRefreshAt;
 
@@ -264,6 +329,39 @@ class LiveRoomController extends PlayerController
       LiveStatusRefreshPolicy();
   bool _volumeSliderPointerEntered = false;
   bool _autoPipAttempting = false;
+  bool _androidRoomSystemInitialized = false;
+  Future<void>? _androidRoomSystemInitialization;
+  Future<void>? _leavingAutoPipCancellation;
+
+  @override
+  Future<void> initSystem() {
+    if (!Platform.isAndroid) return super.initSystem();
+    if (_androidRoomSystemInitialized || _roomDisposed) {
+      return Future<void>.value();
+    }
+    final active = _androidRoomSystemInitialization;
+    if (active != null) return active;
+    final initialization = _initializeAndroidRoomSystem();
+    _androidRoomSystemInitialization = initialization;
+    return initialization.whenComplete(() {
+      if (identical(_androidRoomSystemInitialization, initialization)) {
+        _androidRoomSystemInitialization = null;
+      }
+    });
+  }
+
+  Future<void> _initializeAndroidRoomSystem() async {
+    final status = await _androidPlayerRetirements.waitUntilReleased(
+      instanceId: playerInstanceId,
+      timeout: const Duration(seconds: 12),
+      cancelled: playerClosingSignal,
+    );
+    if (status != PlayerHandoffStatus.ready || _roomDisposed) return;
+    // A previous room's system reset must finish before installing our volume
+    // listener, window channel or automatic fullscreen orientation.
+    await super.initSystem();
+    _androidRoomSystemInitialized = true;
+  }
 
   @override
   void onInit() {
@@ -291,9 +389,9 @@ class LiveRoomController extends PlayerController
     scrollController.addListener(scrollListener);
 
     super.onInit();
-    _positionSubscription = player.stream.position.listen((event) {
-      _lastKnownPlayerPosition = event;
-    });
+    if (!Platform.isAndroid) {
+      _bindPlayerPosition();
+    }
     _iosAudioEventSubscription =
         IosAudioSessionService.instance.events.listen(_handleIosAudioEvent);
   }
@@ -319,6 +417,32 @@ class LiveRoomController extends PlayerController
     return scrollController.position.extentAfter <= 24;
   }
 
+  /// 屏蔽词 Pattern 编译缓存：正则编译远比匹配昂贵，高热房间每秒
+  /// 几十条消息 × N 个屏蔽词，不能每条消息都重新编译
+  static final Map<String, Pattern> _shieldPatternCache = {};
+  static final Set<String> _invalidShieldPatterns = {};
+
+  Pattern? _shieldPatternFor(String keyword) {
+    if (!Utils.isRegexFormat(keyword)) {
+      return keyword;
+    }
+    if (_shieldPatternCache.containsKey(keyword)) {
+      return _shieldPatternCache[keyword];
+    }
+    if (_invalidShieldPatterns.contains(keyword)) {
+      return null;
+    }
+    try {
+      final pattern = RegExp(Utils.removeRegexFormat(keyword));
+      _shieldPatternCache[keyword] = pattern;
+      return pattern;
+    } catch (e) {
+      Log.d("正则屏蔽词 $keyword 无法编译，已跳过");
+      _invalidShieldPatterns.add(keyword);
+      return null;
+    }
+  }
+
   bool _isKeywordShielded(LiveMessage msg) {
     final settings = AppSettingsController.instance;
     if (!settings.danmuShieldEnable.value ||
@@ -326,17 +450,7 @@ class LiveRoomController extends PlayerController
       return false;
     }
     for (var keyword in settings.shieldList) {
-      Pattern? pattern;
-      if (Utils.isRegexFormat(keyword)) {
-        String removedSlash = Utils.removeRegexFormat(keyword);
-        try {
-          pattern = RegExp(removedSlash);
-        } catch (e) {
-          Log.d("正则屏蔽词 $keyword 无法编译，已跳过");
-        }
-      } else {
-        pattern = keyword;
-      }
+      final pattern = _shieldPatternFor(keyword);
       if (pattern != null && msg.message.contains(pattern)) {
         Log.d("命中屏蔽词 $keyword\n已过滤消息: ${msg.message}");
         return true;
@@ -435,8 +549,10 @@ class LiveRoomController extends PlayerController
     return "$userName\u0001${parts.join("\u0002")}";
   }
 
+  static final RegExp _whitespaceRegExp = RegExp(r"\s+");
+
   String _normalizeDanmuFingerprintPart(String value) {
-    return value.trim().replaceAll(RegExp(r"\s+"), " ");
+    return value.trim().replaceAll(_whitespaceRegExp, " ");
   }
 
   void _clearDanmuDedupeState() {
@@ -1065,8 +1181,8 @@ class LiveRoomController extends PlayerController
         }
         final confirmedOffline = _onlineStatusRefreshPolicy.confirmOffline(
           reportedLive: false,
-          hasActivePlaybackEvidence:
-              player.state.playing || player.state.buffering,
+          hasActivePlaybackEvidence: hasCreatedPlayer &&
+              (player.state.playing || player.state.buffering),
         );
         if (!confirmedOffline) {
           Log.d(
@@ -1330,7 +1446,9 @@ class LiveRoomController extends PlayerController
     await _runAutoExitStep("取消自动画中画", cancelAutoPipOnLeave);
     await _runAutoExitStep("停止后台播放服务", stopBackgroundPlaybackService);
     await _runAutoExitStep("停止弹幕", liveDanmaku.stop);
-    await _runAutoExitStep("停止播放器", player.stop);
+    if (hasCreatedPlayer) {
+      await _runAutoExitStep("停止播放器", player.stop);
+    }
     await _runAutoExitStep("释放唤醒锁", WakelockPlus.disable);
     // 定时关闭属于"正常收播"而非意外中断：清掉恢复标记，
     // 避免下次启动自动进房开播（闪退反馈的崩溃路径）
@@ -1561,9 +1679,12 @@ class LiveRoomController extends PlayerController
   }
 
   @override
-  void onClose() async {
+  void onClose() {
     _roomDisposed = true;
+    playerViewReady.value = false;
+    if (Platform.isAndroid) beginPlayerClose();
     clearTransientPlayerOverlays();
+    disposeSystemVolumeListener();
     _loadGeneration += 1;
     _cancelListenExitTimer();
     listenMode.value = false;
@@ -1571,7 +1692,7 @@ class LiveRoomController extends PlayerController
     if (_usesDesktopWindowManager) {
       windowManager.removeListener(this);
     }
-    unawaited(cancelAutoPipOnLeave());
+    _leavingAutoPipCancellation = cancelAutoPipOnLeave();
     CurrentRoomService.instance.clearRoom();
     scrollController.removeListener(scrollListener);
     liveRoomFollowScrollController.dispose();
@@ -1595,13 +1716,56 @@ class LiveRoomController extends PlayerController
     unawaited(
       AppSettingsController.instance.setLastLiveRoomResumePending(false),
     );
-    await _waitForPlayerReopen();
-    if (!isPlayerClosing) {
-      await player.stop();
+    final closing = _closeLiveRoomResources();
+    if (Platform.isAndroid) {
+      // Get's onClose is synchronous: publish the actual completion before the
+      // next page can attempt to open its media.
+      _androidPlayerRetirements.retire(playerInstanceId, closing);
+      Log.i('安卓播放器交接登记：id=$playerInstanceId '
+          'retiring=${_androidPlayerRetirements.pendingCount}');
     }
-    await liveDanmaku.stop();
-    LiveSubtitleService.instance.stop();
-    super.onClose();
+    unawaited(closing.catchError((Object error, StackTrace stackTrace) {
+      Log.e('直播间关闭失败：id=$playerInstanceId $error', stackTrace);
+    }));
+  }
+
+  Future<void> _closeLiveRoomResources() async {
+    try {
+      final pipCancellation = _leavingAutoPipCancellation;
+      if (pipCancellation != null) await pipCancellation;
+      final systemInitialization = _androidRoomSystemInitialization;
+      if (Platform.isAndroid && systemInitialization != null) {
+        try {
+          await systemInitialization;
+        } catch (error, stackTrace) {
+          Log.e('等待系统初始化结束失败：id=$playerInstanceId $error', stackTrace);
+        }
+      }
+      await _waitForPlayerReopen();
+      if (hasCreatedPlayer && !isPlayerClosing) {
+        try {
+          await player.stop();
+        } catch (error, stackTrace) {
+          Log.e('关闭直播间停止播放失败：id=$playerInstanceId $error', stackTrace);
+        }
+      }
+      try {
+        await liveDanmaku.stop();
+      } catch (error, stackTrace) {
+        Log.e('关闭直播间停止弹幕失败：id=$playerInstanceId $error', stackTrace);
+      }
+      if (Platform.isAndroid) {
+        await LiveSubtitleService.instance.stopAndWait();
+      } else {
+        LiveSubtitleService.instance.stop();
+      }
+    } finally {
+      try {
+        await closePlayerResources();
+      } finally {
+        super.onClose();
+      }
+    }
   }
 
   /// 聊天列表滚动到底部
@@ -1744,6 +1908,12 @@ class LiveRoomController extends PlayerController
     final targetSite = site;
     final targetRoomId = roomId;
     final loadStopwatch = Stopwatch()..start();
+    if (!playerViewReady.value) {
+      errorMsg.value = '';
+      // Startup also runs for offline rooms. A waiting-page refresh must retry
+      // the same retirement gate without requiring a media open to occur.
+      unawaited(_preparePlayerForLoad(loadGeneration));
+    }
     _dismissLiveRoomLoadingOverlay();
     _resetPlaybackRecoveryBookkeeping();
     totalViewers.value = 0;
@@ -2088,9 +2258,9 @@ class LiveRoomController extends PlayerController
       finalUrl = finalUrl.replaceAll("http://", "https://");
     }
 
-    final previousWidth = player.state.width;
-    final previousHeight = player.state.height;
-    final wasPlaying = player.state.playing;
+    final previousWidth = hasCreatedPlayer ? player.state.width : null;
+    final previousHeight = hasCreatedPlayer ? player.state.height : null;
+    final wasPlaying = hasCreatedPlayer && player.state.playing;
     Log.i(
       "准备打开播放器：target=${site.id}/$roomId "
       "quality=${currentQualityInfo.value} line=${currentLineIndex + 1}/${playUrls.length} "
@@ -2100,6 +2270,22 @@ class LiveRoomController extends PlayerController
 
     // 重新初始化播放器，并带上当前线路的请求头。
     final openStopwatch = Stopwatch()..start();
+    if (Platform.isAndroid) {
+      final status = await _ensurePlayerReady();
+      if (!_isCurrentLoad(loadGeneration)) return;
+      Log.i('安卓播放器交接结果：id=$playerInstanceId status=${status.name} '
+          'retiring=${_androidPlayerRetirements.pendingCount} '
+          '${openStopwatch.elapsedMilliseconds}ms');
+      if (status != PlayerHandoffStatus.ready) {
+        errorMsg.value = status == PlayerHandoffStatus.releaseFailed
+            ? '上一直播间的播放器释放失败，请重启应用后重试'
+            : '上一直播间的播放器仍在关闭，请稍后刷新重试';
+        SmartDialog.showToast(errorMsg.value);
+        return;
+      }
+      await initSystem();
+      if (!_isCurrentLoad(loadGeneration)) return;
+    }
     await initializePlayer();
     if (!_isCurrentLoad(loadGeneration)) {
       return;
@@ -2129,12 +2315,15 @@ class LiveRoomController extends PlayerController
       "line=${currentLineIndex + 1}/${playUrls.length} "
       "size=${player.state.width}x${player.state.height}",
     );
-    unawaited(
-      LiveSubtitleService.instance.syncPreviewFromSettings(
-        mediaUrl: finalUrl,
-        httpHeaders: playHeaders,
-      ),
-    );
+    final subtitleSync = LiveSubtitleService.instance
+        .syncPreviewFromSettings(
+          mediaUrl: finalUrl,
+          httpHeaders: playHeaders,
+        )
+        .then<void>((_) {});
+    unawaited(subtitleSync.catchError((Object error, StackTrace stackTrace) {
+      Log.e('字幕同步失败：id=$playerInstanceId $error', stackTrace);
+    }));
     Log.d("播放链接\n$finalUrl");
   }
 
@@ -2797,6 +2986,15 @@ class LiveRoomController extends PlayerController
               children: [
                 Obx(
                   () => SettingsSwitch(
+                    title: "省电模式",
+                    subtitle: "降低发热：简化视频缩放、弹幕限 60 帧、关描边；进入下一个直播间后生效",
+                    value: settings.powerSaveMode.value,
+                    onChanged: settings.setPowerSaveMode,
+                  ),
+                ),
+                AppStyle.divider,
+                Obx(
+                  () => SettingsSwitch(
                     title: "硬件解码",
                     subtitle: "播放失败可尝试关闭此选项",
                     value: settings.hardwareDecode.value,
@@ -2901,20 +3099,85 @@ class LiveRoomController extends PlayerController
               borderRadius: AppStyle.radius12,
               color: Theme.of(context).cardColor,
             ),
-            padding: AppStyle.edgeInsetsA4,
+            padding: AppStyle.edgeInsetsA8,
             child: Obx(
-              () => SizedBox(
-                width: 200,
-                child: Slider(
-                  min: 0,
-                  max: 100,
-                  value: AppSettingsController.instance.playerVolume.value,
-                  onChangeStart: (_) => _cancelVolumeSliderDismiss(),
-                  onChanged: (newValue) {
-                    setSessionPlayerVolume(newValue, persist: true);
-                  },
-                ),
-              ),
+              () {
+                // "音量增强"开关决定滑条与预设档范围：关 = 0-100，开 = 0-300
+                final boostEnabled =
+                    AppSettingsController.instance.volumeBoostEnable.value;
+                final maxVolume = boostEnabled
+                    ? PlayerVolumePolicy.maxVolume
+                    : PlayerVolumePolicy.baseVolume;
+                final presets = boostEnabled
+                    ? const [0, 50, 100, 200, 300]
+                    : const [0, 50, 100];
+                return SizedBox(
+                  width: 244,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Slider(
+                        min: 0,
+                        max: maxVolume,
+                        value: effectiveVolume.value.clamp(0.0, maxVolume),
+                        onChangeStart: (_) => _cancelVolumeSliderDismiss(),
+                        onChanged: (newValue) {
+                          setSessionPlayerVolume(newValue, persist: true);
+                        },
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          for (final preset in presets)
+                            InkWell(
+                              onTap: () {
+                                _cancelVolumeSliderDismiss();
+                                setSessionPlayerVolume(
+                                  preset.toDouble(),
+                                  persist: true,
+                                );
+                              },
+                              borderRadius: AppStyle.radius12,
+                              child: Padding(
+                                padding: AppStyle.edgeInsetsA4,
+                                child: Text(
+                                  "$preset",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                        effectiveVolume.value.round() == preset
+                                            ? Theme.of(context).primaryColor
+                                            : Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.color,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (boostEnabled &&
+                          PlayerVolumePolicy.isBoostVolume(
+                            effectiveVolume.value,
+                          ))
+                        Padding(
+                          padding: AppStyle.edgeInsetsA4,
+                          child: Text(
+                            "增益 ×${(effectiveVolume.value / 100).toStringAsFixed(1)}，软件增益，音源响度大时可能破音",
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(
+                                context,
+                              ).textTheme.bodySmall?.color,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
         );
@@ -3069,6 +3332,40 @@ class LiveRoomController extends PlayerController
   }
 
   bool get hasCategoryRecommendation => _buildRecommendationCategory() != null;
+
+  bool get isCurrentCategoryPinned {
+    if (!Get.isRegistered<CustomCategoryService>()) {
+      return false;
+    }
+    final category = _buildRecommendationCategory();
+    if (category == null) {
+      return false;
+    }
+    CustomCategoryService.instance.revision.value;
+    return CustomCategoryService.instance.contains(site.id, category.id);
+  }
+
+  Future<void> togglePinCurrentCategory() async {
+    if (!Get.isRegistered<CustomCategoryService>()) {
+      return;
+    }
+    final category = _buildRecommendationCategory();
+    if (category == null) {
+      SmartDialog.showToast("当前直播间还没有可用的分区标签");
+      return;
+    }
+    final item = CustomCategoryItem.normalized(
+      siteId: site.id,
+      id: category.id,
+      parentId: category.parentId,
+      name: category.name,
+      pic: category.pic,
+    );
+    final pinned = await CustomCategoryService.instance.togglePin(item);
+    SmartDialog.showToast(
+      pinned ? '已添加到自定义分区：${item.name}' : '已从自定义分区移除：${item.name}',
+    );
+  }
 
   String get currentRecommendationSubtitle {
     final roomDetail = detail.value;
@@ -3328,12 +3625,38 @@ class LiveRoomController extends PlayerController
             if (i == 0) {
               return Padding(
                 padding: AppStyle.edgeInsetsB12,
-                child: Text(
-                  currentRecommendationSubtitle,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
-                  ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        currentRecommendationSubtitle,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    if (Get.isRegistered<CustomCategoryService>())
+                      Obx(
+                        () => TextButton.icon(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          ),
+                          onPressed: togglePinCurrentCategory,
+                          icon: Icon(
+                            isCurrentCategoryPinned
+                                ? Icons.push_pin_rounded
+                                : Icons.push_pin_outlined,
+                            size: 16,
+                          ),
+                          label: Text(
+                            isCurrentCategoryPinned ? '已固定' : '固定分区',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               );
             }
@@ -3821,7 +4144,7 @@ class LiveRoomController extends PlayerController
         // 停止当前播放
         await stopBackgroundPlaybackService();
         await _waitForPlayerReopen();
-        await player.stop();
+        if (hasCreatedPlayer) await player.stop();
 
         // 重新拉取房间信息
         loadData();
@@ -3951,7 +4274,8 @@ ${errorStackTrace ?? ""}''');
     required Duration? previousPosition,
   }) async {
     final loadGeneration = _loadGeneration;
-    if (since == null ||
+    if (!hasCreatedPlayer ||
+        since == null ||
         previousPosition == null ||
         !liveStatus.value ||
         currentLineIndex < 0 ||
@@ -3994,7 +4318,12 @@ ${errorStackTrace ?? ""}''');
     _bufferingSampleCount = 0;
     _videoOutputDropSamples = 0;
     _lastVideoOutputDropCount = null;
-    _playbackWatchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+    _lastVideoOutputDropSampleAt = null;
+    // 省电模式放宽采样频率，减少周期唤醒与 native IPC
+    final powerSave = AppSettingsController.instance.powerSaveMode.value;
+    final watchdogInterval =
+        powerSave ? const Duration(seconds: 4) : const Duration(seconds: 2);
+    _playbackWatchdog = Timer.periodic(watchdogInterval, (_) {
       if (!liveStatus.value ||
           player.state.completed ||
           (isBackground && (!_allowBackgroundPlayback || _iosInterrupted))) {
@@ -4016,8 +4345,16 @@ ${errorStackTrace ?? ""}''');
         return;
       }
       if (Platform.isAndroid && !_outputDropSamplePending) {
-        _outputDropSamplePending = true;
-        unawaited(_sampleAndroidVideoOutputDrops());
+        // frame-drop-count 走 native IPC，省电模式下 8 秒采样一次
+        final dropSampleInterval =
+            powerSave ? const Duration(seconds: 8) : const Duration(seconds: 2);
+        final lastDropSample = _lastVideoOutputDropSampleAt;
+        if (lastDropSample == null ||
+            DateTime.now().difference(lastDropSample) >= dropSampleInterval) {
+          _lastVideoOutputDropSampleAt = DateTime.now();
+          _outputDropSamplePending = true;
+          unawaited(_sampleAndroidVideoOutputDrops());
+        }
       }
       final position = player.state.position;
       final last = _lastWatchdogPosition;

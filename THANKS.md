@@ -7,6 +7,12 @@ Simple Live 会继续保持开源和免费使用。感谢赞助维护、提供�
 - 感谢 [xiaoyaocz/dart_simple_live](https://github.com/xiaoyaocz/dart_simple_live) 原作者和上游项目，Simple Live 当前公开仓库基于该项目继续维护。
 - 感谢 [AllLive](https://github.com/xiaoyaocz/AllLive) 提供早期项目基础和思路参考。
 
+## 社区 PR 贡献者
+
+- 感谢 @[821869798](https://github.com/821869798)（unifan）贡献 [PR #148](https://github.com/June6699/dart_simple_live/pull/148) Windows Inno Setup 安装包支持与构建工作流、[PR #175](https://github.com/June6699/dart_simple_live/pull/175) 自定义分区管理与直播间/分区链接一键识别。
+- 感谢 @[zhonglixun](https://github.com/zhonglixun) 贡献 [PR #173](https://github.com/June6699/dart_simple_live/pull/173) 关注页标签面板 Sliver 头部与直播间更多入口修正、[PR #176](https://github.com/June6699/dart_simple_live/pull/176) 主页底栏与平台标签显隐开关及排序降级兼容修复。
+- 感谢 @[C0neF](https://github.com/C0neF) 提交 [PR #38](https://github.com/June6699/dart_simple_live/pull/38) Android 手势调节音量双重衰减修复。
+
 ## 赞助支持
 
 - 感谢若干微信用户赞助支持项目维护。未确认可公开身份前，这里默认匿名致谢。
@@ -21,6 +27,14 @@ Simple Live 会继续保持开源和免费使用。感谢赞助维护、提供�
 - 感谢某位用户 “*纪” 的支持。
 - 感谢某位用户 “*。” 的支持。
 - 感谢某位用户 “*、” 的支持。
+
+## IPTV 公开直播源作者
+特别感谢所有公开维护 IPTV 直播源的作者，本项目所有直播源均完整保留作者原始内容、公告频道与赞助提示，不做任何过滤删除：
+- 感谢 [DataShare-duo](https://github.com/DataShare-duo/IPTV-Source) 提供海外节点直播源，适配境外网络，CDN加速，央视频道完整。
+- 感谢 [suxuang](https://github.com/suxuang/myIPTV) 提供全量多节点直播源，频道覆盖全面，每日自动更新。
+- 感谢 [vbskycn](https://github.com/vbskycn/iptv) 提供全量 IPv4 直播源，每 6 小时自动更新，覆盖完整央视、卫视与地方省份频道。
+- 感谢 [peterhchina](https://peterhchina.github.io/iptv/) 提供直播源同步镜像，每日自动同步更新。
+- 原 fanmingming、HerbertHe、YanG-1989 源已确认公开地址失效或频道连通性不达标，本版本不再内置，感谢作者此前的公益维护。
 
 ## 资源参考
 

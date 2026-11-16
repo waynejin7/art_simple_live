@@ -17,6 +17,17 @@ class LocalStorageService extends GetxService {
   /// 首页排序
   static const String kHomeSort = "HomeSort";
 
+  /// 内置默认 IPTV 源是否已初始化
+  static const String kIptvDefaultInited = "IptvDefaultInited";
+  static const String kIptvSourceEnabled = "IptvSourceEnabled";
+  static const String kIptvCustomSources = "IptvCustomSources";
+  static const String kIptvDeletedSources = "IptvDeletedSources";
+
+  /// IPTV 聚合频道缓存（JSON，含时间戳），冷启动秒开与断网兜底
+  static const String kIptvAggregatedCache = "IptvAggregatedCache";
+  /// IPTV 上次手动选择的线路源名称，起播时优先命中
+  static const String kIptvPreferredLineSource = "IptvPreferredLineSource";
+
   /// 多开布局间距
   static const String kMultiRoomGap = "MultiRoomGap";
 
@@ -85,6 +96,10 @@ class LocalStorageService extends GetxService {
   /// 硬件解码
   static const String kHardwareDecode = "HardwareDecode";
 
+  /// Windows 视频纹理渲染加速，与硬件解码独立。
+  static const String kVideoRenderingAcceleration =
+      "VideoRenderingAcceleration";
+
   /// 聊天区文字大小
   static const String kChatTextSize = "ChatTextSize";
 
@@ -122,13 +137,26 @@ class LocalStorageService extends GetxService {
   /// 遥控器OK键行为：0=显示/隐藏控制栏（默认） 1=暂停/继续
   static const String kOkKeyAction = "OkKeyAction";
 
+  /// 全屏四角时钟：开关与位置（0=左上 1=右上 2=左下 3=右下，默认右上）
+  static const String kPlayerClockEnable = "PlayerClockEnable";
+  static const String kPlayerClockPosition = "PlayerClockPosition";
+
+  /// 自定义分区列表（与移动端备份/局域网同步共享）
+  static const String kCustomCategories = "CustomCategories";
+
   /// 播放器缓冲区大小
   static const String kPlayerBufferSize = "PlayerBufferSize";
   static const String kPlayerForceHttps = "PlayerForceHttps";
   static const String kAutoSwitchNextOnLiveEnd = "AutoSwitchNextOnLiveEnd";
   static const String kAutoSwitchNextOnPlaybackFailure =
       "AutoSwitchNextOnPlaybackFailure";
+
+  /// 自动换台轮播列表：开关、顺序模式（0=顺序 1=随机）与成员快照
+  static const String kAutoSwitchListEnabled = "AutoSwitchListEnabled";
+  static const String kAutoSwitchListMode = "AutoSwitchListMode";
+  static const String kAutoSwitchListItems = "AutoSwitchListItems";
   static const String kPlayerVolume = "PlayerVolume";
+  static const String kVolumeBoostEnable = "VolumeBoostEnable";
   static const String kLogEnable = "LogEnable";
   static const String kMpvProfile = "MpvProfile";
 

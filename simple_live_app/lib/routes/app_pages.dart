@@ -3,8 +3,13 @@
 import 'dart:io';
 
 import 'package:get/get.dart';
+import 'package:simple_live_app/widgets/mobile_page_insets.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_controller.dart';
 import 'package:simple_live_app/modules/category/detail/category_detail_page.dart';
+import 'package:simple_live_app/modules/iptv/player/iptv_player_controller.dart';
+import 'package:simple_live_app/modules/iptv/player/iptv_player_page.dart';
+import 'package:simple_live_app/modules/iptv/playlist/iptv_playlist_controller.dart';
+import 'package:simple_live_app/modules/iptv/playlist/iptv_playlist_page.dart';
 import 'package:simple_live_app/modules/indexed/indexed_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/live_room_page.dart';
@@ -118,10 +123,10 @@ class AppPages {
         if (args is Map<String, dynamic>) {
           Get.put(
             CategoryDetailController(
-            site: args["site"],
-            subCategory: args["category"],
-            onRoomSelected: args["onRoomSelected"] as RoomSelectionCallback?,
-            excludedRoomId: args["excludedRoomId"] as String?,
+              site: args["site"],
+              subCategory: args["category"],
+              onRoomSelected: args["onRoomSelected"] as RoomSelectionCallback?,
+              excludedRoomId: args["excludedRoomId"] as String?,
             ),
             tag: args["controllerTag"] as String?,
           );
@@ -199,6 +204,24 @@ class AppPages {
       page: () => const ParsePage(),
       bindings: [
         BindingsBuilder.put(() => ParseController()),
+      ],
+    ),
+    //IPTV 订阅源管理
+    GetPage(
+      name: RoutePath.kIptvPlaylists,
+      page: () => const IptvPlaylistPage(),
+      bindings: [
+        BindingsBuilder.put(() => IptvPlaylistController()),
+      ],
+    ),
+    //IPTV 播放页
+    GetPage(
+      name: RoutePath.kIptvPlayer,
+      page: () => const IptvPlayerPage(),
+      transition: Platform.isIOS ? Transition.cupertino : null,
+      popGesture: Platform.isIOS,
+      bindings: [
+        BindingsBuilder.put(() => IptvPlayerController()),
       ],
     ),
     //关键词屏蔽
@@ -348,5 +371,14 @@ class AppPages {
       name: RoutePath.kSettingsFollow,
       page: () => const FollowSettingsPage(),
     ),
-  ];
+  ].map((route) {
+    // 直播间与 IPTV 播放页自行处理全屏，其余导航页统一适配。
+    if (route.name == RoutePath.kLiveRoomDetail ||
+        route.name == RoutePath.kIptvPlayer) {
+      return route;
+    }
+    return route.copy(
+      page: () => MobilePageInsets(child: route.page()),
+    );
+  }).toList();
 }

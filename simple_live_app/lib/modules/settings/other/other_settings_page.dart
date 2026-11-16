@@ -89,7 +89,7 @@ class OtherSettingsPage extends GetView<OtherSettingsController> {
                 child: Obx(
                   () => SettingsMenu<String>(
                     title: "Windows GPU 偏好",
-                    subtitle: "选择高性能/NVIDIA 可减少游戏本误用核显；修改后必须完全重启应用",
+                    subtitle: "适用于 AMD、NVIDIA、Intel，由系统按偏好选择；修改后必须完全重启应用",
                     value: AppSettingsController
                         .instance.windowsGpuPreference.value,
                     valueMap: AppSettingsController.windowsGpuPreferenceOptions,
@@ -168,7 +168,9 @@ class OtherSettingsPage extends GetView<OtherSettingsController> {
                 GetBuilder<OtherSettingsController>(
                   builder: (controller) => SettingsAction(
                     title: "高级 mpv options",
-                    subtitle: "每行一个 key=value，覆盖内置档位和可视化设置",
+                    subtitle: Platform.isWindows
+                        ? "每行一个 key=value，覆盖内置档位；关闭硬件解码时始终使用软件解码"
+                        : "每行一个 key=value，覆盖内置档位和可视化设置",
                     value: AppSettingsController
                             .instance.mpvAdvancedOptions.value.isEmpty
                         ? "未设置"
@@ -180,7 +182,9 @@ class OtherSettingsPage extends GetView<OtherSettingsController> {
                 GetBuilder<OtherSettingsController>(
                   builder: (controller) => SettingsAction(
                     title: "导入 mpv.conf",
-                    subtitle: "导入后复制到应用私有目录，覆盖同名 mpv option",
+                    subtitle: Platform.isWindows
+                        ? "覆盖同名 mpv option；关闭硬件解码时始终使用软件解码"
+                        : "导入后复制到应用私有目录，覆盖同名 mpv option",
                     value: AppSettingsController
                             .instance.importedMpvConfPath.value.isEmpty
                         ? "未导入"

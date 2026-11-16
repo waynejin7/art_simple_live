@@ -22,16 +22,20 @@ import 'package:simple_live_app/app/utils/listen_fourth_button.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
+import 'package:simple_live_app/models/db/iptv_favorite.dart';
+import 'package:simple_live_app/models/db/iptv_playlist.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/other/debug_log_page.dart';
 import 'package:simple_live_app/routes/app_pages.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/current_room_service.dart';
+import 'package:simple_live_app/services/custom_category_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/iptv_service.dart';
 import 'package:simple_live_app/services/kuaishou_account_service.dart';
 import 'package:simple_live_app/services/live_subtitle_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
@@ -408,10 +412,11 @@ class _DesktopWindowLifecycle with WindowListener {
       "关闭播放器",
       () async {
         if (Get.isRegistered<LiveRoomController>()) {
-          await Get.find<LiveRoomController>().closePlayerResources();
+          await Get.find<LiveRoomController>()
+              .closePlayerResources(exitingApp: true);
         }
       },
-      timeout: const Duration(milliseconds: 900),
+      timeout: const Duration(milliseconds: 4000),
     );
     _closeStepSync("关闭同步服务", () {
       if (Get.isRegistered<SyncService>()) {
@@ -466,6 +471,8 @@ Future initServices() async {
   Hive.registerAdapter(FollowUserAdapter());
   Hive.registerAdapter(HistoryAdapter());
   Hive.registerAdapter(FollowUserTagAdapter());
+  Hive.registerAdapter(IptvPlaylistAdapter());
+  Hive.registerAdapter(IptvFavoriteAdapter());
 
   //包信息
   Utils.packageInfo = await PackageInfo.fromPlatform();
@@ -473,6 +480,8 @@ Future initServices() async {
   Log.d("Init LocalStorage Service");
   await Get.put(LocalStorageService()).init();
   await Get.put(DBService()).init();
+  await Get.put(IptvService()).init();
+  await IptvService.instance.ensureDefaultPlaylist();
   Get.put(CurrentRoomService());
   //初始化设置控制器
   Get.put(AppSettingsController());
@@ -485,6 +494,7 @@ Future initServices() async {
   Get.put(KuaishouAccountService());
 
   Get.put(FollowService());
+  Get.put(CustomCategoryService());
   Get.put(LiveSubtitleService());
   Get.put(ProfileBackupService());
 
@@ -588,24 +598,11 @@ class MyApp extends StatelessWidget {
           loadingBuilder: ((msg) => const AppLoaddingWidget()),
           //字体大小不跟随系统变化
           builder: (context, child) {
-            // Fix for HyperOS windowed-mode Flutter bug:
-            // - Values > 50 indicate the bug (windowed mode on HyperOS)
-            // - Values == 0 are valid for fullscreen/immersive mode and must NOT be treated as abnormal
-            const fallbackPadding = EdgeInsets.only(top: 25, bottom: 35);
-            const maxNormalPadding = 50.0;
-
             final mediaQueryData = MediaQuery.of(context);
-            final hasAbnormalPadding = Platform.isAndroid &&
-                mediaQueryData.viewPadding.top > maxNormalPadding;
-
-            final fixedMediaQueryData = hasAbnormalPadding
-                ? mediaQueryData.copyWith(
-                    viewPadding: fallbackPadding,
-                    padding: fallbackPadding,
-                    textScaler: const TextScaler.linear(1.0),
-                  )
-                : mediaQueryData.copyWith(
-                    textScaler: const TextScaler.linear(1.0));
+            // 高挖孔屏的正常安全区可能超过 50dp，始终保留系统原始值。
+            final fixedMediaQueryData = mediaQueryData.copyWith(
+              textScaler: const TextScaler.linear(1.0),
+            );
 
             return MediaQuery(
               data: fixedMediaQueryData,

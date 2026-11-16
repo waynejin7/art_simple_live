@@ -19,10 +19,12 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/custom_throttle.dart';
 import 'package:simple_live_app/app/log.dart';
+import 'package:simple_live_app/app/mpv_exit_helper.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/services/background_playback_service.dart';
 import 'package:simple_live_app/services/ios_video_output_size.dart';
 import 'package:simple_live_app/services/mpv_options_service.dart';
+import 'package:simple_live_app/services/player_resource_lifecycle.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
@@ -31,6 +33,8 @@ const _windowsChromeChannel = MethodChannel('simple_live/windows_chrome');
 const _androidWindowChannel = MethodChannel('simple_live/app_window');
 const liveRoomVolumeSliderDialogTag = 'live_room_volume_slider';
 int _androidWindowHandlerGeneration = 0;
+int _nextPlayerInstanceId = 0;
+int _livePlayerInstances = 0;
 
 /// Android OEMs do not use one consistent windowing mode for their system
 /// floating windows: some report freeform, while others only report
@@ -163,25 +167,51 @@ const int _kDanmakuReplayLimit = 300;
 
 mixin PlayerMixin {
   bool _playerInitialized = false;
+  Future<void>? _playerInitializationFuture;
+  final int playerInstanceId = ++_nextPlayerInstanceId;
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
   /// 播放器实例
-  late final player = Player(
-    configuration: PlayerConfiguration(
-      title: "Simple Live Player",
-      logLevel: AppSettingsController.instance.logEnable.value
-          ? MPVLogLevel.info
-          : MPVLogLevel.error,
-    ),
-  );
+  Player? _createdPlayer;
+  Player get player => _createdPlayer ??= _createPlayer();
+  bool get hasCreatedPlayer => _createdPlayer != null;
+
+  Player _createPlayer() {
+    final stopwatch = Stopwatch()..start();
+    final result = Player(
+      configuration: PlayerConfiguration(
+        title: "Simple Live Player",
+        logLevel: AppSettingsController.instance.logEnable.value
+            ? MPVLogLevel.info
+            : MPVLogLevel.error,
+      ),
+    );
+    _livePlayerInstances += 1;
+    Log.i('播放器实例创建：id=$playerInstanceId logicalInstances=$_livePlayerInstances '
+        '${stopwatch.elapsedMilliseconds}ms');
+    return result;
+  }
 
   /// 初始化播放器并设置静态 mpv 参数。
-  Future<void> initializePlayer() async {
+  Future<void> initializePlayer() {
+    final active = _playerInitializationFuture;
+    if (active != null) return active;
+    final initialization = _initializePlayer();
+    _playerInitializationFuture = initialization;
+    initialization.then((_) {}, onError: (Object error, StackTrace stackTrace) {
+      if (identical(_playerInitializationFuture, initialization)) {
+        _playerInitializationFuture = null;
+        _playerInitialized = false;
+      }
+    });
+    return initialization;
+  }
+
+  Future<void> _initializePlayer() async {
     if (_playerInitialized) {
       return;
     }
-    _playerInitialized = true;
     await MpvOptionsService.applyToPlayer(player);
     final nativePlayer = player.platform as NativePlayer;
     // 设置音频输出驱动
@@ -197,6 +227,7 @@ mixin PlayerMixin {
     if (Platform.isAndroid) {
       await nativePlayer.setProperty('force-seekable', 'yes');
     }
+    _playerInitialized = true;
   }
 
   /// 视频控制器
@@ -220,6 +251,25 @@ mixin PlayerStateMixin on PlayerMixin {
 
   RxBool mutedState = false.obs;
   double _volumeBeforeMute = 100.0;
+
+  /// 有效音量（0-300）：≤100 基础段（移动端=系统音量，桌面=播放器音量），
+  /// >100 增益段（mpv 软件增益），是手势/滑条/快捷键共用的唯一真源。
+  final RxDouble effectiveVolume = 100.0.obs;
+
+  /// 当前会话的音量上限，随"音量增强"开关变化：开 = 300，关 = 100。
+  double get _sessionVolumeLimit =>
+      AppSettingsController.instance.volumeBoostEnable.value
+          ? PlayerVolumePolicy.maxVolume
+          : PlayerVolumePolicy.baseVolume;
+
+  /// 移动端系统音量镜像（0.0-1.0）：由 volume_controller 事件流同步，
+  /// 覆盖硬件音量键等应用外的音量变化。
+  double _systemVolumeMirror = 1.0;
+  StreamSubscription<double>? _volumeEventSubscription;
+
+  /// 是否正在进行竖向手势（音量/亮度），声明在基座 mixin 供系统音量
+  /// 监听回调整齐手势期间的同步。
+  bool verticalDragging = false;
 
   /// 是否正在播放（由 player.stream.playing 同步，供 UI 响应式使用）
   RxBool playingState = true.obs;
@@ -628,6 +678,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
     if (Platform.isAndroid || Platform.isIOS) {
       VolumeController.instance.showSystemUI = false;
+      // 监听系统音量变化（含硬件音量键），作为基础段（≤100）的音量来源。
+      _volumeEventSubscription =
+          VolumeController.instance.addListener(_onSystemVolumeChanged);
     }
 
     // 屏幕常亮
@@ -642,6 +695,26 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
   }
 
+  /// 系统音量变化（含硬件音量键）：更新镜像；基础段（≤100）的有效音量
+  /// 跟随系统音量，增益段保持档位不被覆盖。
+  void _onSystemVolumeChanged(double volume) {
+    _systemVolumeMirror = volume.clamp(0.0, 1.0);
+    if (verticalDragging) {
+      return;
+    }
+    final mirrored = _systemVolumeMirror * 100;
+    if (effectiveVolume.value <= PlayerVolumePolicy.baseVolume &&
+        (effectiveVolume.value - mirrored).abs() > 0.5) {
+      effectiveVolume.value = mirrored;
+    }
+  }
+
+  /// 取消系统音量监听（移动端），随播放器关闭释放。
+  void disposeSystemVolumeListener() {
+    _volumeEventSubscription?.cancel();
+    _volumeEventSubscription = null;
+  }
+
   /// 释放一些系统状态
   Future resetSystem() async {
     _systemLifecycleGeneration += 1;
@@ -650,6 +723,12 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     _androidLandscapePendingAfterExternalWindow = false;
     _androidExternalWindowExitGeneration += 1;
     _pipSubscription?.cancel();
+    if (Platform.isIOS) {
+      // 房间关闭时若画中画仍在进行，立即拆除并恢复硬渲染
+      await _teardownIosPip();
+      _iosPipEventSubscription?.cancel();
+      _iosPipEventSubscription = null;
+    }
     if (Platform.isAndroid && _androidWindowChannelActive) {
       final token = _androidWindowHandlerToken;
       _androidWindowChannelActive = false;
@@ -1012,35 +1091,68 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   Future<void> toggleMute() async {
     if (mutedState.value) {
-      final restoreVolume =
-          _volumeBeforeMute <= 0 ? 100.0 : _volumeBeforeMute.clamp(0.0, 100.0);
+      final restoreVolume = _volumeBeforeMute <= 0
+          ? 100.0
+          : _volumeBeforeMute.clamp(0.0, _sessionVolumeLimit);
       await setSessionPlayerVolume(restoreVolume);
       return;
     }
-    _volumeBeforeMute = player.state.volume <= 0
-        ? AppSettingsController.instance.playerVolume.value
-        : player.state.volume;
+    _volumeBeforeMute = effectiveVolume.value > 0
+        ? effectiveVolume.value
+        : AppSettingsController.instance.playerVolume.value
+            .clamp(0.0, _sessionVolumeLimit);
     mutedState.value = true;
     await player.setVolume(0);
   }
 
+  /// 会话内音量设置的唯一入口：手势、滑条弹窗、快捷键都走这里，
+  /// ≤100 基础段与 >100 增益段的路由由各端实现决定，互相不会冲突。
   Future<void> setSessionPlayerVolume(
     double volume, {
     bool persist = false,
   }) async {
-    final requestedValue = volume.clamp(0.0, 100.0).toDouble();
-    final mobile = Platform.isAndroid || Platform.isIOS;
-    final value = requestedValue <= 0 ? 0.0 : (mobile ? 100.0 : requestedValue);
+    final requestedValue = volume.clamp(0.0, _sessionVolumeLimit).toDouble();
+    if (Platform.isAndroid || Platform.isIOS) {
+      await _setMobileSessionVolume(requestedValue);
+    } else {
+      await _setDesktopSessionVolume(requestedValue);
+    }
+    if (persist) {
+      AppSettingsController.instance.setPlayerVolume(requestedValue);
+    }
+  }
+
+  Future<void> _setDesktopSessionVolume(double value) async {
     if (value <= 0) {
       mutedState.value = true;
+      effectiveVolume.value = 0;
       await player.setVolume(0);
-    } else {
+      return;
+    }
+    mutedState.value = false;
+    _volumeBeforeMute = value;
+    effectiveVolume.value = value;
+    await player.setVolume(value);
+  }
+
+  Future<void> _setMobileSessionVolume(double value) async {
+    if (value > PlayerVolumePolicy.baseVolume) {
+      // 增益段：只调播放器软件增益，系统音量保持不变。
       mutedState.value = false;
       _volumeBeforeMute = value;
+      effectiveVolume.value = value;
       await player.setVolume(value);
+      return;
     }
-    if (persist && !mobile) {
-      AppSettingsController.instance.setPlayerVolume(requestedValue);
+    // 基础段：系统音量负责实际输出，播放器保持满格（0 = 静音）。
+    mutedState.value = value <= 0;
+    _volumeBeforeMute = value;
+    effectiveVolume.value = value;
+    await player.setVolume(value <= 0 ? 0 : PlayerVolumePolicy.baseVolume);
+    try {
+      await VolumeController.instance.setVolume(value / 100);
+    } catch (e, stackTrace) {
+      Log.e("设置系统音量失败: $e", stackTrace);
     }
   }
 
@@ -1048,10 +1160,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     if (delta == 0 || Platform.isAndroid || Platform.isIOS) {
       return;
     }
-    final current = player.state.volume.clamp(0.0, 100.0).toDouble();
-    final target = (current + delta).clamp(0.0, 100.0).toDouble();
+    final current =
+        player.state.volume.clamp(0.0, _sessionVolumeLimit).toDouble();
+    final target = (current + delta).clamp(0.0, _sessionVolumeLimit).toDouble();
     await setSessionPlayerVolume(target, persist: true);
-    showGestureTipText("音量 ${target.round()}%");
+    showGestureTipText(target > PlayerVolumePolicy.baseVolume
+        ? "音量 ${target.round()}%（增强）"
+        : "音量 ${target.round()}%");
   }
 
   bool _shouldUseAndroidPhoneOrientationPolicy() {
@@ -1473,6 +1588,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     if (!Platform.isAndroid) {
       return _autoPipOnLeaveConfigured;
     }
+    if (!hasCreatedPlayer || _playerClosing) return false;
     final videoWidth = player.state.width ?? 0;
     final videoHeight = player.state.height ?? 0;
     if (_autoPipOnLeaveConfigured &&
@@ -1535,6 +1651,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   }
 
   Future enablePIP() async {
+    if (Platform.isIOS) {
+      await _enableIOSPip();
+      return;
+    }
     if (!Platform.isAndroid) {
       SmartDialog.showToast("当前平台暂不支持小窗播放");
       return;
@@ -1553,6 +1673,193 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     );
     if (status != PiPStatus.enabled) {
       SmartDialog.showToast("进入小窗失败");
+    }
+  }
+
+  // ===== iOS 画中画（AVSampleBufferDisplayLayer 路线，iOS 15+） =====
+  // 帧源由 vendored media_kit_video 提供：每帧 CVPixelBuffer 零拷贝送入
+  // 系统小窗。小窗会话期间整体切换到纯 CPU 路径（软渲染 + 软解码）：
+  // 退后台后 iOS 收回 GPU 访问权导致 GL 停帧，而 mpv 软渲染器又无法
+  // 映射 VideoToolbox 硬解帧（真机全黑根因），因此两者必须同时切换。
+  // 所有切换严格限定在会话内，退出时按用户原始配置还原，正常播放
+  // 路径不受任何影响。
+  StreamSubscription<dynamic>? _iosPipEventSubscription;
+  bool _iosPipTearingDown = false;
+  bool _iosPipActive = false;
+  bool _iosPipOriginalHardwareDecode = true;
+  String _iosPipOriginalHwdec = "auto-safe";
+  Media? _iosPipMedia;
+
+  /// 本会话是否执行了停播重建（后台保持画面开关开启时）；
+  /// 退出时按标记决定是否还原解码/渲染配置
+  bool _iosPipPipelineSwitched = false;
+
+  Future<void> _enableIOSPip() async {
+    if (!await IosPictureInPicture.isSupported()) {
+      SmartDialog.showToast("设备不支持小窗播放");
+      return;
+    }
+    if (_iosPipActive) {
+      return;
+    }
+    final handle = await player.handle;
+    if (handle == 0) {
+      SmartDialog.showToast("进入小窗失败");
+      return;
+    }
+    final media = player.state.playlist.medias.isNotEmpty
+        ? player.state.playlist.medias.first
+        : null;
+    if (media == null) {
+      SmartDialog.showToast("进入小窗失败");
+      return;
+    }
+    _iosPipActive = true;
+    _ensureIosPipEventListener();
+    final nativePlayer = player.platform as NativePlayer;
+    // 后台保持画面（默认开）：停播重建管线到软解码+软渲染，
+    // 纯 CPU 路径不依赖 GPU 访问权，退后台可持续出帧；关闭后走
+    // 即显省电路线（秒开，后台画面冻结、音频正常）。
+    // 播放中运行时交换渲染上下文会销毁 vo_libmpv 导致视频链掉线
+    //（mpv 日志 Video: no video），因此重建必须在停播状态下进行。
+    final keepBackground =
+        AppSettingsController.instance.pipKeepBackgroundVideo.value;
+    if (keepBackground) {
+      _iosPipMedia = media;
+      _iosPipPipelineSwitched = true;
+      Log.i("iOS 小窗启动（后台保持画面）：handle=$handle media=${media.uri}");
+      try {
+        _iosPipOriginalHwdec =
+            (await nativePlayer.getProperty("hwdec")).toString();
+      } catch (e) {
+        Log.w("iOS 小窗读取原始 hwdec 失败: $e");
+      }
+      _iosPipOriginalHardwareDecode =
+          AppSettingsController.instance.hardwareDecode.value;
+      try {
+        await player.stop();
+        await _setIosPipHwdec("no");
+      } catch (e) {
+        Log.w("iOS 小窗切换软解码失败: $e");
+      }
+      await IosPictureInPicture.setHardwareAcceleration(
+        handle: handle,
+        enabled: false,
+      );
+      try {
+        await player.open(media);
+      } catch (e) {
+        Log.w("iOS 小窗重开播放失败: $e");
+      }
+    } else {
+      _iosPipPipelineSwitched = false;
+      Log.i("iOS 小窗启动（即显省电）：handle=$handle");
+    }
+    final started = await IosPictureInPicture.start(
+      handle: handle,
+      startImmediately: true,
+    );
+    if (!started) {
+      await _teardownIosPip();
+      SmartDialog.showToast("进入小窗失败");
+    }
+  }
+
+  Future<void> _setIosPipHwdec(String value) async {
+    final nativePlayer = player.platform as NativePlayer;
+    final before = await nativePlayer.getProperty("hwdec");
+    await nativePlayer.setProperty("hwdec", value);
+    final after = await nativePlayer.getProperty("hwdec");
+    Log.i("iOS 小窗 hwdec 切换：$before -> $value（生效 $after）");
+  }
+
+  void _ensureIosPipEventListener() {
+    _iosPipEventSubscription ??= IosPictureInPicture.events.listen(
+      _onIosPipEvent,
+      onError: (e) {
+        Log.d("iOS 小窗事件异常: $e");
+      },
+    );
+  }
+
+  void _onIosPipEvent(dynamic event) {
+    if (event is! Map) {
+      return;
+    }
+    final type = event['event']?.toString();
+    Log.i("iOS 小窗事件：$event");
+    switch (type) {
+      case 'didStart':
+        _applyPipEnteredState();
+        break;
+      case 'restore':
+      case 'didStop':
+        // 用户点击小窗恢复按钮或返回 App：继续播放，只做状态恢复
+        unawaited(_teardownIosPip());
+        break;
+      case 'closed':
+        // 用户在小窗点关闭：结束观看，暂停播放
+        unawaited(_teardownIosPip(pauseOnClosed: true));
+        break;
+      case 'failed':
+        Log.w("iOS 小窗启动失败: ${event['reason']}");
+        unawaited(_teardownIosPip());
+        SmartDialog.showToast("进入小窗失败");
+        break;
+      case 'setPlaying':
+        final playing = event['playing'] == true;
+        unawaited(playing ? player.play() : player.pause());
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> _teardownIosPip({bool pauseOnClosed = false}) async {
+    if (_iosPipTearingDown || !_iosPipActive) {
+      return;
+    }
+    _iosPipTearingDown = true;
+    try {
+      await IosPictureInPicture.stop();
+      // 仅停播重建会话需要还原解码/渲染（停播状态下交换，同进入时）；
+      // 正常播放不受会话影响，原生侧对"已是目标状态"的切换为空操作
+      if (_iosPipPipelineSwitched) {
+        final restoreHardware = _iosPipOriginalHardwareDecode;
+        final handle = await player.handle;
+        final media = _iosPipMedia;
+        _iosPipMedia = null;
+        try {
+          await player.stop();
+        } catch (e) {
+          Log.d("iOS 小窗停止播放失败: $e");
+        }
+        if (handle != 0) {
+          await IosPictureInPicture.setHardwareAcceleration(
+            handle: handle,
+            enabled: restoreHardware,
+          );
+        }
+        try {
+          await _setIosPipHwdec(_iosPipOriginalHwdec);
+        } catch (e) {
+          Log.w("iOS 小窗恢复解码配置失败: $e");
+        }
+        if (media != null) {
+          try {
+            await player.open(media, play: !pauseOnClosed);
+          } catch (e) {
+            Log.w("iOS 小窗恢复播放失败: $e");
+          }
+        }
+        _iosPipPipelineSwitched = false;
+      }
+      _restorePipExitedState();
+    } catch (e) {
+      Log.d("iOS 小窗退出清理失败: $e");
+    } finally {
+      _iosPipActive = false;
+      _iosPipTearingDown = false;
     }
   }
 }
@@ -1644,8 +1951,9 @@ mixin PlayerGestureControlMixin
     }
   }
 
-  bool verticalDragging = false;
   bool leftVerticalDrag = false;
+
+  /// 音量手势基准（0-3，对应有效音量 0-300%）。
   var _currentVolume = 0.0;
   var _currentBrightness = 1.0;
   var verStartPosition = 0.0;
@@ -1656,11 +1964,25 @@ mixin PlayerGestureControlMixin
 
   DelayedThrottle? throttle;
 
-  @override
-  void cancelVerticalDrag() {
-    _verticalDragGeneration += 1;
+  /// 冲刷上一把手势尚未落地的最终音量。
+  /// 节流器在忙碌期只保留最后一次调用，并会在 cancel 时丢弃它：
+  /// 快速滑动在收尾调用触发前结束（或被下一把手势打断）时，若直接
+  /// cancel 会丢失全部调整（OSD 已显示目标值但实际未生效）。
+  /// 因此在拖动结束/取消/新一轮开始前，把最终值立即落地。
+  void _flushPendingVolume() {
+    final pendingVolume = lastVolume;
+    lastVolume = -1;
     throttle?.cancel();
     throttle = null;
+    if (pendingVolume >= 0) {
+      unawaited(_realSetVolume(pendingVolume));
+    }
+  }
+
+  @override
+  void cancelVerticalDrag() {
+    _flushPendingVolume();
+    _verticalDragGeneration += 1;
     verticalDragging = false;
     leftVerticalDrag = false;
     _useLocalDragPosition = false;
@@ -1720,28 +2042,18 @@ mixin PlayerGestureControlMixin
     lastVolume = -1;
 
     verticalDragging = true;
-    _verticalDragReady = false;
     final dragGeneration = ++_verticalDragGeneration;
-    double? initialVolume;
-    var initialBrightness = 1.0;
-    var volumeReadSucceeded = true;
-    if (Platform.isWindows || Platform.isLinux) {
-      final currentPlayerVolume = player.state.volume;
-      if (currentPlayerVolume > 0) {
-        initialVolume = currentPlayerVolume.clamp(0.0, 100.0) / 100;
-      } else {
-        initialVolume = AppSettingsController.instance.playerVolume.value
-                .clamp(0.0, 100.0) /
-            100;
-      }
-    } else if (Platform.isAndroid || Platform.isIOS) {
-      try {
-        initialVolume = await VolumeController.instance.getVolume();
-      } catch (e, stackTrace) {
-        volumeReadSucceeded = false;
-        Log.e("读取系统音量失败: $e", stackTrace);
-      }
+    if (leftVerticalDrag) {
+      // 左侧（亮度）仍需等待异步读取后才能就绪。
+      _verticalDragReady = false;
+    } else {
+      // 右侧（音量）：基准直接取有效音量（0-300，含增益档）。
+      // 系统音量变化已由 volume_controller 监听保持同步，无需等待
+      // 异步读取即可就绪，避免快速滑动在准备窗口内被整把丢弃。
+      _currentVolume = effectiveVolume.value / 100;
+      _verticalDragReady = true;
     }
+    var initialBrightness = 1.0;
     if (Platform.isAndroid ||
         Platform.isIOS ||
         Platform.isMacOS ||
@@ -1756,13 +2068,6 @@ mixin PlayerGestureControlMixin
     if (dragGeneration != _verticalDragGeneration || !verticalDragging) {
       return;
     }
-    if (!leftVerticalDrag && !volumeReadSucceeded) {
-      // Do not calculate a new value from the previous gesture when the
-      // system-volume read failed; the next gesture can retry the read.
-      verticalDragging = false;
-      return;
-    }
-    _currentVolume = initialVolume ?? _currentVolume;
     _currentBrightness = initialBrightness;
     _verticalDragReady = true;
   }
@@ -1811,8 +2116,8 @@ mixin PlayerGestureControlMixin
     } else {
       value = ((dy - verStartPosition) / _verticalDragExtent);
       seek = value.abs() + _currentVolume;
-      if (seek > 1) {
-        seek = 1;
+      if (seek > _sessionVolumeLimit / 100) {
+        seek = _sessionVolumeLimit / 100;
       }
     }
     int volume = _convertVolume((seek * 100).round());
@@ -1821,23 +2126,23 @@ mixin PlayerGestureControlMixin
     }
     lastVolume = volume;
     // update UI outside throttle to make it more fluent
-    showGestureTipText("音量 $volume%");
+    showGestureTipText(volume > PlayerVolumePolicy.baseVolume
+        ? "音量 $volume%（增强）"
+        : "音量 $volume%");
     throttle?.invoke(() async => await _realSetVolume(volume));
   }
 
-  // 0 to 100, 5 step each
+  // 0 to 300, 5 step each
   int _convertVolume(int volume) {
     return (volume / 5).round() * 5;
   }
 
   Future<void> _realSetVolume(int volume) async {
     Log.logPrint(volume);
-    if (Platform.isWindows || Platform.isLinux) {
-      await setSessionPlayerVolume(volume.toDouble(), persist: true);
-      return;
-    }
-    // 手势只调系统音量，播放器内部音量由独立设置控制。
-    await VolumeController.instance.setVolume(volume / 100);
+    // 手势与滑条/快捷键统一走 setSessionPlayerVolume：
+    // ≤100 段调系统音量（移动端）或播放器音量（桌面），
+    // >100 段统一为播放器软件增益，各控件之间不会互相冲突。
+    await setSessionPlayerVolume(volume.toDouble(), persist: true);
   }
 
   void setGestureBrightness(double dy) {
@@ -1898,7 +2203,20 @@ class PlayerController extends BaseController
     return !_playerClosing && generation == playbackLoadGeneration;
   }
 
-  Future<void>? _playbackOpenFuture;
+  final _nativeOpenQueue = PlayerNativeOpenQueue();
+  Future<void>? _playerCloseFuture;
+  final Completer<void> _playerClosingSignal = Completer<void>();
+
+  Future<void> get playerClosingSignal => _playerClosingSignal.future;
+
+  /// Invalidates delayed recovery immediately, before asynchronous teardown.
+  void beginPlayerClose() {
+    _playerClosing = true;
+    if (!_playerClosingSignal.isCompleted) {
+      _playerClosingSignal.complete();
+    }
+    _cancelStablePlaybackTimer();
+  }
 
   bool _isPlaybackOwnerCurrent(
     int loadGeneration,
@@ -1912,9 +2230,9 @@ class PlayerController extends BaseController
 
   /// Serializes every media open so a stale recovery cannot finish after a
   /// newer room open and replace its media.
-  /// 单次 open 的最长等待。渲染管线挂死时 player.open 可能永不完成，
-  /// 所有恢复路径又串行排在同一个 open 后面，超时后强制放行，
-  /// 让下一路恢复（或换台）能继续推进，避免页面永久卡死。
+  /// Limits the UI wait only. The underlying native open retains ownership
+  /// until it really finishes; a timeout must never permit a concurrent open
+  /// or disposal of the same native handle.
   static const _playbackOpenTimeout = Duration(seconds: 20);
 
   Future<bool> openPlaybackMedia(
@@ -1923,33 +2241,22 @@ class PlayerController extends BaseController
     required int mediaGeneration,
     bool Function()? isStillOwner,
   }) async {
-    while (true) {
-      if (!_isPlaybackOwnerCurrent(
+    final status = await _nativeOpenQueue.open(
+      operation: () {
+        _surfaceRecoveryGraceUntil =
+            DateTime.now().add(_surfaceRecoveryGraceDuration);
+        return player.open(media);
+      },
+      isCurrent: () => _isPlaybackOwnerCurrent(
         loadGeneration,
         mediaGeneration,
         isStillOwner,
-      )) {
-        return false;
-      }
-      final activeOpen = _playbackOpenFuture;
-      if (activeOpen == null) {
-        break;
-      }
-      try {
-        await activeOpen.timeout(_playbackOpenTimeout);
-      } on TimeoutException {
-        Log.e(
-          "等待旧媒体打开超时(${_playbackOpenTimeout.inSeconds}s)，强制接管打开流程",
-          StackTrace.current,
-        );
-        if (identical(_playbackOpenFuture, activeOpen)) {
-          _playbackOpenFuture = null;
-        }
-      } catch (e, stackTrace) {
-        Log.e("等待旧媒体打开失败: $e", stackTrace);
-      }
-    }
-
+      ),
+      timeout: _playbackOpenTimeout,
+      onPreviousError: (error, stackTrace) {
+        Log.e('等待旧媒体打开失败：id=$playerInstanceId $error', stackTrace);
+      },
+    );
     if (!_isPlaybackOwnerCurrent(
       loadGeneration,
       mediaGeneration,
@@ -1957,38 +2264,41 @@ class PlayerController extends BaseController
     )) {
       return false;
     }
-    _surfaceRecoveryGraceUntil =
-        DateTime.now().add(_surfaceRecoveryGraceDuration);
-    final opening = Future<void>.microtask(() => player.open(media));
-    _playbackOpenFuture = opening;
-    try {
-      await opening.timeout(_playbackOpenTimeout);
-      return _isPlaybackOwnerCurrent(
-        loadGeneration,
-        mediaGeneration,
-        isStillOwner,
+    if (status == PlayerOpenStatus.timedOut) {
+      reportPlaybackOpenTimeout(
+        loadGeneration: loadGeneration,
+        mediaGeneration: mediaGeneration,
+        isStillOwner: isStillOwner,
       );
-    } on TimeoutException {
-      Log.e(
-        "打开媒体超时(${_playbackOpenTimeout.inSeconds}s)，放弃等待"
-        "（渲染管线可能已挂死）",
-        StackTrace.current,
-      );
-      return false;
-    } finally {
-      if (identical(_playbackOpenFuture, opening)) {
-        _playbackOpenFuture = null;
-      }
+    }
+    return status == PlayerOpenStatus.opened;
+  }
+
+  void reportPlaybackOpenTimeout({
+    required int loadGeneration,
+    required int mediaGeneration,
+    bool Function()? isStillOwner,
+  }) {
+    if (!_isPlaybackOwnerCurrent(
+      loadGeneration,
+      mediaGeneration,
+      isStillOwner,
+    )) {
+      return;
+    }
+    Log.e(
+        '播放器打开等待超时：id=$playerInstanceId '
+        'timeout=${_playbackOpenTimeout.inSeconds}s，保留原生操作所有权',
+        StackTrace.current);
+    if (!_playerClosing) {
+      errorMsg.value = '播放器响应超时，请稍后重试；持续无响应请重启应用';
+      SmartDialog.showToast(errorMsg.value);
     }
   }
 
   Future<void> waitForPlaybackOpen() async {
-    final activeOpen = _playbackOpenFuture;
-    if (activeOpen == null) {
-      return;
-    }
     try {
-      await activeOpen;
+      await _nativeOpenQueue.waitUntilIdle();
     } catch (e, stackTrace) {
       Log.e("等待媒体打开结束失败: $e", stackTrace);
     }
@@ -1996,11 +2306,26 @@ class PlayerController extends BaseController
 
   @override
   void onInit() {
-    unawaited(initSystem());
+    if (!deferPlayerBindings) initializePlayerBindings();
+    super.onInit();
+  }
+
+  /// Android single-room controllers defer every native resource until the
+  /// previous page has released its player. Other player uses stay immediate.
+  bool get deferPlayerBindings => false;
+  bool _playerBindingsInitialized = false;
+
+  void initializePlayerBindings() {
+    if (_playerBindingsInitialized || _playerClosing) return;
+    _playerBindingsInitialized = true;
+    unawaited(initSystem().catchError((Object error, StackTrace stackTrace) {
+      Log.e('播放器系统初始化失败：id=$playerInstanceId $error', stackTrace);
+    }));
     initStream();
     //设置音量
-    player.setVolume(_resolvedPlayerVolume());
-    super.onInit();
+    final resolvedVolume = _resolvedPlayerVolume();
+    effectiveVolume.value = resolvedVolume;
+    player.setVolume(resolvedVolume);
   }
 
   StreamSubscription<String>? _errorSubscription;
@@ -2505,6 +2830,7 @@ class PlayerController extends BaseController
       mobile: Platform.isAndroid || Platform.isIOS,
       muted: mutedState.value,
       persisted: AppSettingsController.instance.playerVolume.value,
+      boostEnabled: AppSettingsController.instance.volumeBoostEnable.value,
     );
   }
 
@@ -2512,7 +2838,13 @@ class PlayerController extends BaseController
     if (_playerClosing) {
       return;
     }
-    await player.setVolume(_resolvedPlayerVolume());
+    final resolvedVolume = _resolvedPlayerVolume();
+    final mobile = Platform.isAndroid || Platform.isIOS;
+    // 桌面端与移动端增益段同步有效音量；移动端基础段保持系统音量语义不动。
+    if (!mobile || resolvedVolume > PlayerVolumePolicy.baseVolume) {
+      effectiveVolume.value = resolvedVolume;
+    }
+    await player.setVolume(resolvedVolume);
   }
 
   // Fix Issue #57 & #97: 处理异常的视频尺寸（Surface失效）。
@@ -2844,6 +3176,7 @@ class PlayerController extends BaseController
     if (!Platform.isAndroid) {
       return;
     }
+    if (!hasCreatedPlayer) return;
     final service = BackgroundPlaybackService.instance;
     final forced = listenModeEnabled;
     final enabled =
@@ -2924,7 +3257,12 @@ class PlayerController extends BaseController
           await player.pause();
           break;
         case 'can_duck':
-          await player.setVolume(30);
+          // 按当前播放器音量等比压低（含增益档），gain 分支再恢复。
+          await player.setVolume(
+            (player.state.volume * 0.3)
+                .clamp(0.0, PlayerVolumePolicy.maxVolume)
+                .toDouble(),
+          );
           break;
       }
     }
@@ -2996,13 +3334,20 @@ class PlayerController extends BaseController
 
     Log.i(
       '播放诊断：hwdec=$hwdec codec=$codec fps=$fps bitrate=$videoBitrate '
-      'source=$sourceResolution output=$outputResolution',
+      'source=$sourceResolution output=$outputResolution '
+      '${MpvOptionsService.diagnosticsSummary()}',
     );
     Utils.showBottomSheet(
       title: "播放信息",
       child: ListView(
         children: [
           diagnosticTile('实际硬件解码', hwdec),
+          if (Platform.isWindows)
+            diagnosticTile(
+                '视频渲染设置',
+                AppSettingsController.instance.videoRenderingAcceleration.value
+                    ? 'GPU 加速（设置值，初始化失败时可能回落为软件输出）'
+                    : '软件输出（设置值）'),
           diagnosticTile('视频编码', codec),
           diagnosticTile('视频 FPS', fps),
           diagnosticTile('视频码率（bit/s）', videoBitrate),
@@ -3020,29 +3365,98 @@ class PlayerController extends BaseController
     );
   }
 
-  Future<void> closePlayerResources() async {
-    if (_playerClosing) {
-      return;
-    }
-    _playerClosing = true;
-    _cancelStablePlaybackTimer();
+  Future<void> closePlayerResources({bool exitingApp = false}) {
+    beginPlayerClose();
+    return _playerCloseFuture ??= _closePlayerResources(exitingApp: exitingApp);
+  }
+
+  Future<void> _closePlayerResources({required bool exitingApp}) async {
+    final closingStopwatch = Stopwatch()..start();
+    Log.i('播放器释放开始：id=$playerInstanceId');
     clearTransientPlayerOverlays();
-    await stopBackgroundPlaybackService();
+    // No timeout here: disposing while native open still owns the handle is
+    // unsafe. Android handoff bounds the next room's wait independently.
     await waitForPlaybackOpen();
-    await player.stop();
-    if (smallWindowState.value) {
-      await exitSmallWindow();
+    final initialization = _playerInitializationFuture;
+    if (initialization != null) {
+      try {
+        await initialization;
+      } catch (error, stackTrace) {
+        Log.e('等待播放器初始化失败：id=$playerInstanceId $error', stackTrace);
+      }
     }
-    disposeStream();
-    disposeDanmakuController();
-    await resetSystem();
-    await player.dispose();
+    // Windows 退出前先保存 mpv handle，dispose 后用于让核心立即停止。
+    int? mpvHandle;
+    if (hasCreatedPlayer && exitingApp && Platform.isWindows) {
+      try {
+        mpvHandle = await player.handle;
+      } catch (_) {}
+    }
+    await releasePlayerResources(
+      steps: [
+        PlayerCleanupStep('background-service', () async {
+          if (_playerBindingsInitialized) await stopBackgroundPlaybackService();
+        }),
+        PlayerCleanupStep('stop', () async {
+          if (!hasCreatedPlayer) return;
+          final stopwatch = Stopwatch()..start();
+          try {
+            await player.stop();
+          } finally {
+            Log.i('播放器停止结束：id=$playerInstanceId '
+                '${stopwatch.elapsedMilliseconds}ms');
+          }
+        }),
+        PlayerCleanupStep('small-window', () async {
+          if (smallWindowState.value) await exitSmallWindow();
+        }),
+        PlayerCleanupStep('streams', disposeStream),
+        PlayerCleanupStep('danmaku-controller', disposeDanmakuController),
+        PlayerCleanupStep('system', () async {
+          if (_playerBindingsInitialized) await resetSystem();
+        }),
+      ],
+      dispose: () async {
+        if (!hasCreatedPlayer) {
+          Log.i('播放器无需dispose：id=$playerInstanceId（尚未创建原生实例）');
+          return;
+        }
+        final stopwatch = Stopwatch()..start();
+        try {
+          await player.dispose();
+          _livePlayerInstances -= 1;
+          Log.i('播放器dispose完成：id=$playerInstanceId '
+              '${stopwatch.elapsedMilliseconds}ms '
+              'total=${closingStopwatch.elapsedMilliseconds}ms '
+              'logicalInstances=$_livePlayerInstances');
+        } catch (error, stackTrace) {
+          Log.e('播放器原生释放失败：id=$playerInstanceId $error', stackTrace);
+          rethrow;
+        }
+      },
+      onError: (step, error, stackTrace) {
+        Log.e('播放器清理步骤失败：id=$playerInstanceId step=$step $error', stackTrace);
+      },
+    );
+    // 渲染上下文已同步释放，让 mpv 核心线程在进程退出/DLL 卸载前结束。
+    if (exitingApp && Platform.isWindows && mpvHandle != null) {
+      try {
+        await MpvExitHelper.shutdown(mpvHandle);
+      } catch (e) {
+        Log.logPrint("mpv 核心退出失败: $e");
+      }
+    }
   }
 
   @override
   void onClose() async {
-    Log.w("播放器关闭");
-    await closePlayerResources();
-    super.onClose();
+    Log.w('播放器关闭：id=$playerInstanceId');
+    try {
+      await closePlayerResources();
+    } catch (error, stackTrace) {
+      Log.e('播放器关闭未完成：id=$playerInstanceId $error', stackTrace);
+    } finally {
+      super.onClose();
+    }
   }
 }

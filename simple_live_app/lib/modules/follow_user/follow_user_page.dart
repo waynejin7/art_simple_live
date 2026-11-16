@@ -231,142 +231,79 @@ class FollowUserPage extends GetView<FollowUserController> {
               Obx(
                 () => _buildActiveFilterBar(context),
               ),
-              Padding(
-                padding: AppStyle.edgeInsetsH8.copyWith(top: 4),
-                child: Text(
-                  "标签",
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-              ),
-              Padding(
-                padding: AppStyle.edgeInsetsA8.copyWith(top: 4),
-                child: Obx(
-                  () => SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Wrap(
-                      spacing: 12,
-                      children: controller.filterTagOptions.map((tag) {
-                        return FilterButton(
-                          text: tag.tag,
-                          selected: controller.selectedTagId.value == tag.id,
-                          onTap: () => controller.setSelectedTag(tag),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: AppStyle.edgeInsetsH8,
-                child: Obx(
-                  () => Row(
-                    children: [
-                      ChoiceChip(
-                        label: const Text("按状态"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.liveStatus,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.liveStatus);
-                        },
-                      ),
-                      AppStyle.hGap8,
-                      ChoiceChip(
-                        label: const Text("按平台"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.platform,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.platform);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: AppStyle.edgeInsetsA8.copyWith(top: 4),
-                child: Obx(
-                  () => SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Wrap(
-                      spacing: 12,
-                      children: controller.groupOptions.map((option) {
-                        return FilterButton(
-                          text: option.title,
-                          selected:
-                              controller.selectedGroupId.value == option.id,
-                          onTap: () {
-                            controller.setGroupOption(option);
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ),
               Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Obx(
-                    () {
-                      final layout = _resolveLayoutSpec(constraints.maxWidth);
-                      return GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onHorizontalDragEnd: (details) {
-                          if (!controller.paginationEnabled.value) {
-                            return;
-                          }
-                          final velocity = details.primaryVelocity ?? 0;
-                          if (velocity < -260) {
-                            controller.goToNextPage();
-                          } else if (velocity > 260) {
-                            controller.goToPreviousPage();
-                          }
-                        },
-                        child: PageGridView(
-                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 96),
-                          crossAxisSpacing: layout.crossAxisSpacing,
-                          mainAxisSpacing: layout.mainAxisSpacing,
-                          mainAxisExtent: layout.mainAxisExtent,
-                          childAspectRatio: layout.childAspectRatio,
-                          useFixedGrid: layout.useFixedGrid,
-                          crossAxisCount: layout.crossAxisCount,
-                          pageController: controller,
-                          firstRefresh: false,
-                          showPCRefreshButton: false,
-                          itemBuilder: (_, i) {
-                            final item = controller.list[i];
-                            final isCurrent = "${item.siteId}_${item.roomId}" ==
-                                CurrentRoomService.instance.currentKey;
-                            return FollowUserItem(
-                              item: item,
-                              style: layout.itemStyle,
-                              showLiveCover: AppSettingsController
-                                  .instance.followShowLiveCover.value,
-                              multiSelectMode: controller.multiSelectMode.value,
-                              selectedForMultiRoom:
-                                  controller.isSelectedForMultiRoom(item),
-                              onSpecialTap: () {
-                                controller.toggleSpecialFollow(item);
-                              },
-                              onRemove: () {
-                                controller.removeItem(item);
-                              },
-                              onTap: () {
-                                if (PlatformUtils.supportsInlineMultiRoom &&
-                                    controller.multiSelectMode.value) {
-                                  controller.toggleMultiRoomItem(item);
-                                  return;
-                                }
-                                controller.openFollowRoom(item);
-                              },
-                              onLongPress: () {
-                                setFollowTagDialog(item);
-                              },
-                              playing: isCurrent,
-                            );
+                child: NotificationListener<ScrollMetricsNotification>(
+                  onNotification: (_) {
+                    controller.updateBackToTopVisibility();
+                    return false;
+                  },
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => Obx(
+                      () {
+                        final layout = _resolveLayoutSpec(constraints.maxWidth);
+                        return GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onHorizontalDragEnd: (details) {
+                            if (!controller.paginationEnabled.value) {
+                              return;
+                            }
+                            final velocity = details.primaryVelocity ?? 0;
+                            if (velocity < -260) {
+                              controller.goToNextPage();
+                            } else if (velocity > 260) {
+                              controller.goToPreviousPage();
+                            }
                           },
-                        ),
-                      );
-                    },
+                          child: PageGridView(
+                            header: _buildTagPanelHeader(context),
+                            padding: const EdgeInsets.fromLTRB(8, 0, 8, 96),
+                            crossAxisSpacing: layout.crossAxisSpacing,
+                            mainAxisSpacing: layout.mainAxisSpacing,
+                            mainAxisExtent: layout.mainAxisExtent,
+                            childAspectRatio: layout.childAspectRatio,
+                            useFixedGrid: layout.useFixedGrid,
+                            crossAxisCount: layout.crossAxisCount,
+                            pageController: controller,
+                            firstRefresh: false,
+                            showPCRefreshButton: false,
+                            itemBuilder: (_, i) {
+                              final item = controller.list[i];
+                              final isCurrent =
+                                  "${item.siteId}_${item.roomId}" ==
+                                      CurrentRoomService.instance.currentKey;
+                              return FollowUserItem(
+                                item: item,
+                                style: layout.itemStyle,
+                                showLiveCover: AppSettingsController
+                                    .instance.followShowLiveCover.value,
+                                multiSelectMode:
+                                    controller.multiSelectMode.value,
+                                selectedForMultiRoom:
+                                    controller.isSelectedForMultiRoom(item),
+                                onSpecialTap: () {
+                                  controller.toggleSpecialFollow(item);
+                                },
+                                onRemove: () {
+                                  controller.removeItem(item);
+                                },
+                                onTap: () {
+                                  if (PlatformUtils.supportsInlineMultiRoom &&
+                                      controller.multiSelectMode.value) {
+                                    controller.toggleMultiRoomItem(item);
+                                    return;
+                                  }
+                                  controller.openFollowRoom(item);
+                                },
+                                onLongPress: () {
+                                  setFollowTagDialog(item);
+                                },
+                                playing: isCurrent,
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -379,6 +316,26 @@ class FollowUserPage extends GetView<FollowUserController> {
                     right: 16,
                     bottom: Platform.isAndroid || Platform.isIOS ? 12 : 18,
                     child: _buildFloatingPaginationBar(context),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          Obx(
+            () => controller.showBackToTop.value
+                ? Positioned(
+                    right: 16,
+                    bottom: controller.paginationEnabled.value
+                        ? (Platform.isAndroid || Platform.isIOS ? 84 : 90)
+                        : 16,
+                    child: SafeArea(
+                      top: false,
+                      left: false,
+                      child: FloatingActionButton.small(
+                        heroTag: null,
+                        tooltip: "回到顶部",
+                        onPressed: controller.scrollBackToTop,
+                        child: const Icon(Icons.arrow_upward),
+                      ),
+                    ),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -454,6 +411,7 @@ class FollowUserPage extends GetView<FollowUserController> {
         ),
       );
     }
+    // 这两个开关开启时常驻可关，避免折叠面板里的提示文本只能看不能操作。
     if (settings.followOnlyLive.value) {
       chips.add(
         InputChip(
@@ -479,6 +437,208 @@ class FollowUserPage extends GetView<FollowUserController> {
         spacing: 8,
         runSpacing: 8,
         children: chips,
+      ),
+    );
+  }
+
+  /// Sliver 头部：跟随列表自然滚动，高度由内容自适应，无硬编码估算。
+  Widget _buildTagPanelHeader(BuildContext context) {
+    return Container(
+      margin: AppStyle.edgeInsetsH8.copyWith(top: 8, bottom: 4),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? Colors.grey.withAlpha(50)
+            : Colors.white70,
+        borderRadius: AppStyle.radius12,
+        border: Border.all(color: Colors.grey.withAlpha(25)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: AppStyle.radius12),
+        clipBehavior: Clip.antiAlias,
+        child: Obx(() {
+          final expanded = controller.tagPanelExpanded.value;
+          final colorScheme = Theme.of(context).colorScheme;
+          final activeToggles = <String>[
+            if (AppSettingsController.instance.followOnlyLive.value)
+              "仅开播",
+            if (AppSettingsController.instance.followRefreshOnEnter.value)
+              "自动刷新",
+          ];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              InkWell(
+                onTap: controller.toggleTagPanel,
+                child: Padding(
+                  padding: AppStyle.edgeInsetsH12.copyWith(top: 8, bottom: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.sell_outlined,
+                              size: 18,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            AppStyle.hGap8,
+                            Text(
+                              "标签",
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            if (!expanded) ...[
+                              AppStyle.hGap8,
+                              Flexible(
+                                flex: 1,
+                                child: Container(
+                                  padding: AppStyle.edgeInsetsH8.copyWith(
+                                    top: 2,
+                                    bottom: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.surface,
+                                    borderRadius: AppStyle.radius24,
+                                    border: Border.all(
+                                      color: colorScheme.outlineVariant,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    controller.selectedTagName,
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (activeToggles.isNotEmpty) ...[
+                        AppStyle.hGap8,
+                        Flexible(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Icon(
+                                Icons.tune,
+                                size: 14,
+                                color: colorScheme.primary,
+                              ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  activeToggles.join(" · "),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      AppStyle.hGap8,
+                      Text(
+                        expanded ? "收起" : "展开",
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.primary),
+                      ),
+                      Icon(
+                        expanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        size: 20,
+                        color: colorScheme.primary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: expanded
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Wrap(
+                                spacing: 12,
+                                children:
+                                    controller.filterTagOptions.map((tag) {
+                                  return FilterButton(
+                                    text: tag.tag,
+                                    selected:
+                                        controller.selectedTagId.value == tag.id,
+                                    onTap: () => controller.setSelectedTag(tag),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                ChoiceChip(
+                                  label: const Text("按状态"),
+                                  selected: controller.groupMode.value ==
+                                      FollowGroupMode.liveStatus,
+                                  onSelected: (_) {
+                                    controller.setGroupMode(
+                                      FollowGroupMode.liveStatus,
+                                    );
+                                  },
+                                ),
+                                AppStyle.hGap8,
+                                ChoiceChip(
+                                  label: const Text("按平台"),
+                                  selected: controller.groupMode.value ==
+                                      FollowGroupMode.platform,
+                                  onSelected: (_) {
+                                    controller.setGroupMode(
+                                      FollowGroupMode.platform,
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Wrap(
+                                spacing: 12,
+                                children:
+                                    controller.groupOptions.map((option) {
+                                  return FilterButton(
+                                    text: option.title,
+                                    selected:
+                                        controller.selectedGroupId.value ==
+                                            option.id,
+                                    onTap: () {
+                                      controller.setGroupOption(option);
+                                    },
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
@@ -970,8 +1130,7 @@ class FollowUserPage extends GetView<FollowUserController> {
                     ? null
                     : () async {
                         Get.back();
-                        final (added, _) =
-                            await controller.moveFollowsToTag(
+                        final (added, _) = await controller.moveFollowsToTag(
                           selected.toList(),
                           tag,
                         );
@@ -990,9 +1149,8 @@ class FollowUserPage extends GetView<FollowUserController> {
 
   /// 把 source 标签合并到其他用户标签
   void mergeTagDialog(FollowUserTag source) {
-    final candidates = controller.userTagList
-        .where((t) => t.id != source.id)
-        .toList();
+    final candidates =
+        controller.userTagList.where((t) => t.id != source.id).toList();
     if (candidates.isEmpty) {
       SmartDialog.showToast("没有其他标签可合并");
       return;
