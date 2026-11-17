@@ -45,8 +45,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          set -uo pipefail
           # GITHUB_TOKEN pushes do not trigger push workflows.
           # Dispatch an explicit build instead, but only if the repo changed.
-          if [ "$(git rev-parse HEAD)" != "${{ github.sha }}" ]; then
-            gh workflow run build-desktop-ios.yml --ref master
+          if [ "$(git rev-parse HEAD)" = "${{ github.sha }}" ]; then
+            echo "No new upstream changes, skipping build dispatch."
+            exit 0
           fi
+          # The dispatch can fail transiently right after the push above
+          # (new commit not yet visible to the Actions API), so retry gh
+          # first and fall back to a direct workflow-dispatch API call.
+          for attempt in 1 2 3; do
+            echo "Dispatch attempt $attempt with gh..."
+            if gh workflow run build-desktop-ios.yml --repo "${{ github.repository }}" --ref master; then
+              echo "Build dispatched."
+              exit 0
+            fi
+            echo "::warning::gh dispatch attempt $attempt failed, retrying in 30s..."
+            sleep 30
+          done
+          echo "gh dispatch failed after 3 attempts, trying the REST API..."
+          http_code="$(curl -sS -o /tmp/dispatch-response.txt -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build-desktop-ios.yml/dispatches" \
+            -d '{"ref":"master"}')"
+          echo "REST dispatch HTTP status: $http_code"
+          cat /tmp/dispatch-response.txt
+          if [ "$http_code" = "204" ]; then
+            echo "Build dispatched via REST API."
+            exit 0
+          fi
+          echo "::error::Failed to dispatch build after gh retries and REST fallback (HTTP $http_code)."
+          exit 1
