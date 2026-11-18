@@ -37,10 +37,15 @@ val syncDartQuickJsJniLibs = tasks.register("syncDartQuickJsJniLibs") {
     }
 
     doLast {
-        val flutterNativeAssetsReady = abiByArch.values.all { abi ->
+        // ABIs already provided by Flutter native assets. A single target
+        // platform (e.g. arm64 only) builds native assets for that ABI only,
+        // so requiring all three ABIs here would wrongly fall back to copying
+        // the same .so into the generated dir, and mergeReleaseJniLibFolders
+        // then fails with "Duplicate resources".
+        val nativeReadyAbis = abiByArch.values.filter { abi ->
             flutterNativeAssetsRoot.resolve("$abi/libdart_quickjs.so").let { it.exists() && it.length() > 0 }
-        }
-        if (flutterNativeAssetsReady) {
+        }.toSet()
+        if (nativeReadyAbis.size == abiByArch.size) {
             generatedRoot.deleteRecursively()
             logger.lifecycle("Using Flutter native assets for dart_quickjs Android libraries.")
             return@doLast
@@ -61,6 +66,11 @@ val syncDartQuickJsJniLibs = tasks.register("syncDartQuickJsJniLibs") {
                 }
                 val abi = abiByArch[jsonStringValue(inputText, "target_architecture")]
                     ?: return@mapNotNull null
+                if (abi in nativeReadyAbis) {
+                    // Already provided by Flutter native assets; copying it
+                    // into the generated dir would duplicate it at merge time.
+                    return@mapNotNull null
+                }
                 val buildId = inputFile.parentFile.name
                 val source = sharedBuildRoot.resolve("$buildId/libdart_quickjs.so")
                 if (!source.exists()) {
@@ -73,7 +83,13 @@ val syncDartQuickJsJniLibs = tasks.register("syncDartQuickJsJniLibs") {
             .toList()
 
         if (candidates.isEmpty()) {
-            logger.warn("No dart_quickjs Android native libraries were found under $hooksRoot")
+            if (nativeReadyAbis.isNotEmpty()) {
+                // Every ABI this build needs is already covered by native assets.
+                generatedRoot.deleteRecursively()
+                logger.lifecycle("Using Flutter native assets for dart_quickjs Android libraries.")
+            } else {
+                logger.warn("No dart_quickjs Android native libraries were found under $hooksRoot")
+            }
             return@doLast
         }
 
