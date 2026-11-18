@@ -117,7 +117,7 @@ jobs:
           chmod 600 simple_live_tv_app/android/key.properties simple_live_tv_app/android/app/release.jks
       - name: Build TV APK
         working-directory: simple_live_tv_app
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release --target-platform android-arm64 --split-per-abi
       - uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android-TV
@@ -139,7 +139,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           find release-assets -type f \( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \) -exec cp {} dist/ \;
-          test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 5
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 3
           ls -lh dist
       - name: Publish release
         uses: softprops/action-gh-release@v2
