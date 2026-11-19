@@ -115,6 +115,7 @@ jobs:
             printf 'keyPassword=%s\n' "$TV_KEY_PASSWORD"
           } > simple_live_tv_app/android/key.properties
           chmod 600 simple_live_tv_app/android/key.properties simple_live_tv_app/android/app/release.jks
+          
       - name: Build TV APK
         working-directory: simple_live_tv_app
         run: flutter build apk --release --target-platform android-arm64 --split-per-abi
@@ -141,12 +142,19 @@ jobs:
           find release-assets -type f \( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \) -exec cp {} dist/ \;
           test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 3
           ls -lh dist
+  - uses: actions/checkout@v4
+  - name: Read TV app version
+    id: tv-version
+    shell: bash
+    run: |
+      version=$(grep '^version:' simple_live_tv_app/pubspec.yaml | sed 's/^version: *//; s/+.*//')
+      echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: fork-build-${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: SimpleLive build ${{ github.run_number }}
+          name: ${{ steps.tv-version.outputs.version }}
           generate_release_notes: false
           body: |
             Automated build from commit ${{ github.sha }}.
