@@ -125,7 +125,7 @@ jobs:
           path: simple_live_tv_app/build/app/outputs/flutter-apk/*-release.apk
           if-no-files-found: error
 
-    release:
+release:
     name: Publish GitHub Release
     needs: [ios, windows, android-tv]
     if: ${{ success() }}
