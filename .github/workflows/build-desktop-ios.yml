@@ -142,13 +142,13 @@ jobs:
           find release-assets -type f \( -name '*.ipa' -o -name '*.zip' -o -name '*.apk' \) -exec cp {} dist/ \;
           test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 3
           ls -lh dist
-  - uses: actions/checkout@v4
-  - name: Read TV app version
-    id: tv-version
-    shell: bash
-    run: |
-      version=$(grep '^version:' simple_live_tv_app/pubspec.yaml | sed 's/^version: *//; s/+.*//')
-      echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+          - name: Read TV app version
+        id: tv-version
+        shell: bash
+        run: |
+          version=$(grep '^version:' simple_live_tv_app/pubspec.yaml | sed 's/^version: *//; s/+.*//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
