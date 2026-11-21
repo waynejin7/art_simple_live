@@ -27,6 +27,10 @@ class LocalStorageService extends GetxService {
   static const String kIptvAggregatedCache = "IptvAggregatedCache";
   /// IPTV 上次手动选择的线路源名称，起播时优先命中
   static const String kIptvPreferredLineSource = "IptvPreferredLineSource";
+  static const String kIptvRefreshScope = "IptvRefreshScope";
+  static const String kIptvSourceHealth = "IptvSourceHealth";
+  static const String kIptvLineKnownStatus = "IptvLineKnownStatus";
+  static const String kIptvAutoRefreshOnEnter = "IptvAutoRefreshOnEnter";
 
   /// 多开布局间距
   static const String kMultiRoomGap = "MultiRoomGap";
